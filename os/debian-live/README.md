@@ -1,6 +1,6 @@
 # NOVA OS image builder
 
-This is the first bootable-PC image target for NOVA: **Debian 13 (Trixie), amd64, KDE Plasma/Wayland**, built with Debian Live `live-build` and the Debian Installer's live-installer mode.
+This is the first bootable-PC image target for NOVA: **Debian 13 (Trixie), amd64, KDE Plasma/Wayland**, built with Debian Live live-build and the Debian Installer's live-installer mode.
 
 It is an intentionally conventional Linux base. NOVA does not fork a kernel or replace the bootloader. The first release should prove hardware support, install/upgrade/recovery and runtime boundaries before attempting a custom kernel or compositor.
 
@@ -12,7 +12,8 @@ It is an intentionally conventional Linux base. NOVA does not fork a kernel or r
 - Waydroid from Trixie backports, Wine, QEMU/KVM and libvirt tools.
 - Btrfs and Snapper utilities (not automatically configured on every installation).
 - Debian Installer live mode, which installs the live filesystem to disk.
-- NOVA Desktop native Tauri package and the NOVA host API binary.
+- NOVA Desktop native Tauri .deb package and the NOVA host API binary.
+- A hardened per-user systemd unit that starts the read-only NOVA host service at graphical login.
 
 Runtime packages being present does not mean an app is compatible. Waydroid depends on a Wayland session and kernel Binder support; Wine compatibility is app/version specific; hardware-accelerated VMs require accessible KVM. NOVA reports these conditions and never silently executes a downloaded installer.
 
@@ -20,35 +21,47 @@ Runtime packages being present does not mean an app is compatible. Waydroid depe
 
 Use a clean Debian 13/Ubuntu 24.04+ x86_64 build host or a disposable VM. The build requires root for live-build's chroot operations and substantial disk space.
 
-Install tools:
+Install the ISO and Tauri prerequisites:
 
 ~~~bash
 sudo apt update
-sudo apt install -y live-build debootstrap squashfs-tools xorriso \
+sudo apt install -y \
+  libwebkit2gtk-4.1-dev build-essential curl wget file \
+  libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+  live-build debootstrap squashfs-tools xorriso \
   grub-pc-bin grub-efi-amd64-bin mtools dosfstools isolinux syslinux-common
+~~~
 
-# Build the native NOVA shell package and daemon.
+Build the native NOVA shell package and daemon:
+
+~~~bash
 npm install
 npm run desktop:build
 cargo build --release -p nova-daemon
+~~~
 
-# Stage the binaries/packages into the image tree.
+Stage the binaries/packages into the image tree:
+
+~~~bash
 install -D -m 0755 target/release/nova-daemon \
   os/debian-live/config/includes.chroot/usr/local/bin/nova-daemon
 mkdir -p os/debian-live/config/packages.chroot
 cp apps/shell/src-tauri/target/release/bundle/deb/*.deb \
   os/debian-live/config/packages.chroot/
-
-# Build the bootable ISO.
-cd os/debian-live
-sudo ./build.sh
 ~~~
 
-The image is written to `os/debian-live/live-image-amd64.hybrid.iso` (the exact filename is printed by the build script). Verify it with `sha256sum` and boot it in a disposable VM before testing on physical hardware.
+Build the bootable ISO:
+
+~~~bash
+cd os/debian-live
+sudo bash ./build.sh
+~~~
+
+The image is written to os/debian-live/live-image-amd64.hybrid.iso (the exact filename is printed by the build script). Verify it with sha256sum and boot it in a disposable VM before testing on physical hardware.
 
 ## Build from GitHub Actions
 
-Open **Actions → Build NOVA ISO → Run workflow**. The workflow builds and tests the Rust daemon and Tauri frontend/package, creates the live ISO, verifies the ISO structure and uploads the ISO plus SHA-256 checksum as an artifact.
+Open **Actions → Build NOVA ISO → Run workflow**. The workflow builds and tests the Rust daemon and Tauri frontend/package, creates the live ISO, checks its El Torito boot records and uploads the ISO plus SHA-256 checksum as an artifact.
 
 The first ISO workflow is manual by design; normal code pushes should not trigger a multi-gigabyte OS image build.
 

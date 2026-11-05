@@ -11,9 +11,10 @@ Usage:
   scripts/validate-iso.sh --iso PATH [--checksum PATH] [--report-dir PATH]
 
 Checks:
-  - non-empty ISO 9660 image
-  - checksum file (defaults to PATH.sha256)
-  - El Torito BIOS and UEFI boot entries
+  - non-empty ISO 9660 image and matching SHA-256 checksum
+  - BIOS and UEFI El Torito entries
+  - UEFI FAT boot image, fallback loader and Secure Boot signatures
+  - generated GRUB menu, serial console and automatic live boot
   - live kernel, initrd and SquashFS root filesystem
 USAGE
 }
@@ -36,7 +37,7 @@ done
 [[ -n "$ISO" ]] || fail "--iso is required"
 [[ -s "$ISO" ]] || fail "ISO does not exist or is empty: $ISO"
 
-for tool in file xorriso sha256sum stat grep; do
+for tool in file xorriso sha256sum stat grep mdir mcopy sbverify grub-script-check; do
   command -v "$tool" >/dev/null 2>&1 || fail "missing validation dependency: $tool"
 done
 
@@ -65,6 +66,32 @@ grep -Eiq 'ISO 9660' <<< "$FILE_DESCRIPTION" || fail "file(1) does not identify 
 xorriso -indev "$ISO" -report_el_torito plain > "$REPORT_DIR/el-torito.txt" 2>&1 || fail "xorriso could not read the El Torito boot catalog"
 grep -Eiq 'BIOS' "$REPORT_DIR/el-torito.txt" || fail "BIOS El Torito boot entry is missing"
 grep -Eiq 'UEFI' "$REPORT_DIR/el-torito.txt" || fail "UEFI El Torito boot entry is missing"
+grep -Eiq 'efi\.img' "$REPORT_DIR/el-torito.txt" || fail "UEFI El Torito boot image path is missing from the catalog"
+
+# Validate the actual EFI FAT image instead of trusting only the catalog flag.
+EFI_IMAGE="$REPORT_DIR/efi.img"
+xorriso -indev "$ISO" -extract /boot/grub/efi.img "$EFI_IMAGE" > "$REPORT_DIR/efi-extract.txt" 2>&1 || fail "could not extract /boot/grub/efi.img from the ISO"
+[[ -s "$EFI_IMAGE" ]] || fail "extracted UEFI boot image is empty"
+mdir -i "$EFI_IMAGE" ::/EFI/BOOT > "$REPORT_DIR/efi-boot-directory.txt" 2>&1 || fail "UEFI boot image has no EFI/BOOT directory"
+
+for loader in BOOTX64.EFI grubx64.efi; do
+  loader_path="$REPORT_DIR/$loader"
+  mcopy -i "$EFI_IMAGE" "::/EFI/BOOT/$loader" "$loader_path" > "$REPORT_DIR/mcopy-$loader.txt" 2>&1 || fail "UEFI fallback loader is missing: $loader"
+  [[ -s "$loader_path" ]] || fail "UEFI loader is empty: $loader"
+  sbverify --list "$loader_path" > "$REPORT_DIR/signature-$loader.txt" 2>&1 || fail "UEFI loader has no verifiable Secure Boot signature: $loader"
+done
+
+# Inspect the exact GRUB files shipped in the ISO. Kernel arguments alone are
+# insufficient if GRUB itself is not visible to the headless serial harness.
+xorriso -indev "$ISO" -cat /boot/grub/config.cfg > "$REPORT_DIR/grub-config.cfg" 2> "$REPORT_DIR/grub-config-extract.txt" || fail "generated GRUB config.cfg is missing from the ISO"
+xorriso -indev "$ISO" -cat /boot/grub/grub.cfg > "$REPORT_DIR/grub-menu.cfg" 2> "$REPORT_DIR/grub-menu-extract.txt" || fail "generated GRUB grub.cfg is missing from the ISO"
+grep -Fq 'serial --unit=0 --speed=115200' "$REPORT_DIR/grub-config.cfg" || fail "generated GRUB config does not initialize serial COM1"
+grep -Fq 'terminal_output --append serial' "$REPORT_DIR/grub-config.cfg" || fail "generated GRUB config does not mirror output to serial"
+grep -Fq 'source /boot/grub/config.cfg' "$REPORT_DIR/grub-menu.cfg" || fail "generated GRUB menu does not load NOVA's GRUB configuration"
+grep -Eiq 'Live system' "$REPORT_DIR/grub-menu.cfg" || fail "generated GRUB menu has no live system entry"
+grep -Fq 'console=ttyS0,115200n8' "$REPORT_DIR/grub-menu.cfg" || fail "generated live menu does not pass the serial console to Linux"
+grub-script-check "$REPORT_DIR/grub-config.cfg" > "$REPORT_DIR/grub-config-syntax.txt" 2>&1 || fail "generated GRUB console configuration has invalid syntax"
+grub-script-check "$REPORT_DIR/grub-menu.cfg" > "$REPORT_DIR/grub-menu-syntax.txt" 2>&1 || fail "generated GRUB menu has invalid syntax"
 
 xorriso -indev "$ISO" -ls /live > "$REPORT_DIR/live-files.txt" 2>&1 || fail "the /live directory is missing from the ISO"
 grep -Eiq 'vmlinuz' "$REPORT_DIR/live-files.txt" || fail "live kernel is missing"
@@ -76,9 +103,11 @@ grep -Eiq 'filesystem\.squashfs' "$REPORT_DIR/live-files.txt" || fail "live Squa
   printf 'Bytes: %s\n' "$ISO_SIZE"
   printf 'SHA-256: '
   sha256sum "$ISO" | awk '{print $1}'
-  printf 'BIOS boot entry: present\n'
-  printf 'UEFI boot entry: present\n'
+  printf 'BIOS El Torito boot entry: present\n'
+  printf 'UEFI El Torito boot image: present\n'
+  printf 'UEFI fallback loader: present and Secure Boot signed\n'
+  printf 'GRUB graphical menu + serial console: present\n'
   printf 'Live kernel/initrd/SquashFS: present\n'
 } | tee "$REPORT_DIR/summary.txt"
 
-echo "NOVA ISO structural validation passed."
+echo "NOVA ISO structural and boot-chain validation passed."

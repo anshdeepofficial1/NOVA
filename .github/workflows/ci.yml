@@ -22,6 +22,43 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo test --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Build and smoke-test the NOVA host API
+        run: |
+          cargo build --release -p nova-daemon
+          set -euo pipefail
+          ./target/release/nova-daemon > "$RUNNER_TEMP/nova-daemon.log" 2>&1 &
+          daemon_pid=$!
+          cleanup() {
+            kill "$daemon_pid" 2>/dev/null || true
+            wait "$daemon_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          health_file="$RUNNER_TEMP/nova-health.json"
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:47820/health -o "$health_file"; then
+              break
+            fi
+            sleep 0.2
+          done
+          grep -q '"service":"nova-daemon"' "$health_file"
+
+          curl -fsS http://127.0.0.1:47820/api/system -o "$RUNNER_TEMP/nova-system.json"
+          grep -q '"host_os":"linux"' "$RUNNER_TEMP/nova-system.json"
+
+          route_status="$(curl -sS -o "$RUNNER_TEMP/nova-route.json" -w "%{http_code}" \
+            -X POST http://127.0.0.1:47820/api/compatibility/inspect \
+            -H 'Content-Type: application/json' \
+            -d '{"path":"example.apk"}')"
+          test "$route_status" = "200"
+          grep -q '"runtime":"android_container"' "$RUNNER_TEMP/nova-route.json"
+          grep -q '"execution_started":false' "$RUNNER_TEMP/nova-route.json"
+
+          unsupported_status="$(curl -sS -o "$RUNNER_TEMP/nova-unsupported.json" -w "%{http_code}" \
+            -X POST http://127.0.0.1:47820/api/compatibility/inspect \
+            -H 'Content-Type: application/json' \
+            -d '{"path":"example.unknown"}')"
+          test "$unsupported_status" = "415"
 
   shell:
     name: Shell and native desktop checks
@@ -47,5 +84,11 @@ jobs:
       - run: npm run build
       - name: Build the native Linux desktop package
         run: npm run desktop:build
-      - name: Verify the Debian package exists
-        run: test -n "$(find apps/shell/src-tauri/target/release/bundle/deb -maxdepth 1 -name '*.deb' -print -quit)"
+      - name: Verify Debian package contents and bundled daemon
+        run: |
+          package="$(find apps/shell/src-tauri/target/release/bundle/deb -maxdepth 1 -name '*.deb' -print -quit)"
+          test -n "$package"
+          dpkg-deb --info "$package"
+          dpkg-deb --contents "$package" | tee "$RUNNER_TEMP/nova-deb-contents.txt"
+          grep -q "nova-shell" "$RUNNER_TEMP/nova-deb-contents.txt"
+          grep -q "nova-daemon" "$RUNNER_TEMP/nova-deb-contents.txt"

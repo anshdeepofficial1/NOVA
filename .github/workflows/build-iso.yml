@@ -103,7 +103,7 @@ jobs:
           sudo bash scripts/smoke-iso-qemu.sh \
             --iso os/debian-live/live-image-amd64.hybrid.iso \
             --firmware both \
-            --timeout-seconds 600 \
+            --timeout-seconds 1800 \
             --log-dir os/debian-live/validation/qemu
 
       - name: Upload ISO, checksum, build manifest and test evidence

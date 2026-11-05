@@ -4,7 +4,6 @@ members = ["crates/nova-core", "crates/nova-daemon"]
 
 [workspace.package]
 edition = "2021"
-license = "MIT"
 version = "0.1.0"
 rust-version = "1.78"
 

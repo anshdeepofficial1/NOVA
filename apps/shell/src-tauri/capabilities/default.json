@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Minimal permissions for the NOVA desktop window.",
+  "description": "Minimal permissions for the NOVA desktop window. The Rust backend starts the fixed bundled sidecar; the webview cannot spawn commands.",
   "windows": ["main"],
   "permissions": ["core:default"]
 }

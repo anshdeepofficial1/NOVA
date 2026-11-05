@@ -1,6 +1,11 @@
 # Display and Wayland desktop
 kde-plasma-desktop
 kwin-wayland
+xwayland
+polkit-kde-agent-1
+xdg-desktop-portal
+xdg-desktop-portal-kde
+xdg-desktop-portal-gtk
 sddm
 dolphin
 konsole
@@ -20,6 +25,8 @@ lshw
 mesa-utils
 firmware-linux
 firmware-linux-free
+amd64-microcode
+intel-microcode
 fonts-noto-core
 fonts-noto-color-emoji
 

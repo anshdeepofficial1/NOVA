@@ -2,11 +2,17 @@
   "name": "nova-os",
   "private": true,
   "version": "0.1.0",
-  "workspaces": ["apps/shell"],
+  "workspaces": [
+    "apps/shell"
+  ],
   "scripts": {
     "dev": "npm run dev --workspace @nova/shell",
     "build": "npm run build --workspace @nova/shell",
-    "typecheck": "npm run typecheck --workspace @nova/shell"
+    "typecheck": "npm run typecheck --workspace @nova/shell",
+    "desktop:dev": "npm run desktop:dev --workspace @nova/shell",
+    "desktop:build": "npm run desktop:build --workspace @nova/shell"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }

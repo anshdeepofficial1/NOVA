@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=NOVA Host Service
+Comment=Start NOVA's read-only local capability service
+Exec=systemctl --user start nova-daemon.service
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

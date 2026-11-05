@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 if [[ "$(id -u)" -ne 0 ]]; then
-  echo "Run this script with sudo: sudo ./build.sh" >&2
+  echo "Run this script with sudo: sudo bash ./build.sh" >&2
   exit 1
 fi
 
@@ -26,7 +26,7 @@ if ! compgen -G "config/packages.chroot/*.deb" >/dev/null; then
   exit 1
 fi
 
-lb config
+bash "$SCRIPT_DIR/auto/config"
 lb build
 
 ISO_PATH="$SCRIPT_DIR/live-image-amd64.hybrid.iso"

@@ -41,7 +41,8 @@ A website cannot directly execute arbitrary APK, EXE or DMG files on the user's 
 - Host discovery for OS/kernel, distribution, session type, package manager, Flatpak, Waydroid, Wayland/Binder prerequisites, Wine, QEMU/KVM and browser executables.
 - Runtime policy crate that requires a verified, app-and-artifact-bound approval grant, supported permissions, runtime readiness and bounded resource limits before it can produce a default-deny sandbox plan.
 - Loopback-only Axum API with an 8 KiB request-body limit.
-- Native Tauri desktop package configuration and React shell.
+- Native Tauri desktop application with a bundled Rust daemon sidecar; the webview cannot spawn arbitrary commands.
+- Tauri-generated desktop icon assets from the committed NOVA SVG source.
 - Debian Trixie live-build recipe with KDE, live installer, Waydroid backports, Wine, QEMU/KVM, Flatpak and NOVA components.
 - Per-user systemd service for the local NOVA daemon in the image.
 - Automated Rust, frontend and native desktop CI; manual ISO build workflow.
@@ -61,7 +62,7 @@ A website cannot directly execute arbitrary APK, EXE or DMG files on the user's 
 
 ## Run NOVA locally
 
-Requirements: Rust stable, Node.js 20+, npm and Git. For Tauri on Debian/Ubuntu, install the native dependencies from the [official Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
+Requirements: Rust 1.90+, Node.js 20+, npm and Git. The native desktop build stages a host daemon sidecar and generates the NOVA icon set from `apps/shell/src-tauri/brand/nova.svg`. For Tauri on Debian/Ubuntu, install the native dependencies from the [official Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 Terminal 1 — start the host service:
 
@@ -88,7 +89,7 @@ Build the native Linux package:
 npm run desktop:build
 ~~~
 
-The shell expects the local daemon at http://127.0.0.1:47820. The daemon is deliberately read-only today: capability lookup and package planning only. It does not install software, call a shell, start a VM or execute a selected file.
+The native Tauri app checks for the NOVA user service first and otherwise starts its bundled daemon sidecar. The sidecar is terminated with the desktop app. The browser-only Vite preview still requires `cargo run -p nova-daemon` in another terminal. The daemon is deliberately read-only today: capability lookup and package planning only. It does not install software, call a shell, start a VM or execute a selected file.
 
 ## Build the bootable image
 

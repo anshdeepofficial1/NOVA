@@ -29,6 +29,7 @@
   "bundle": {
     "active": true,
     "targets": ["deb"],
+    "externalBin": ["binaries/nova-daemon"],
     "category": "Utility",
     "shortDescription": "NOVA desktop workspace",
     "longDescription": "The NOVA desktop workspace for discovering application runtimes and managing a unified computing environment."

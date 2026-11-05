@@ -19,7 +19,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Check shell script syntax
+      - name: Check shell script syntax and QEMU harness behavior
         run: |
           bash -n scripts/check-host.sh
           bash -n scripts/stage-sidecar.sh
@@ -27,10 +27,12 @@ jobs:
           bash -n scripts/validate-live-build-config.sh
           bash -n scripts/validate-iso.sh
           bash -n scripts/smoke-iso-qemu.sh
+          bash -n scripts/test-smoke-iso-qemu.sh
           bash -n os/debian-live/build.sh
           bash -n os/debian-live/auto/build
           sh -n os/debian-live/auto/config
           sh -n os/debian-live/auto/clean
+          bash scripts/test-smoke-iso-qemu.sh
       - name: Validate Debian Live configuration using Debian Trixie live-build
         run: |
           docker run --rm \
@@ -39,7 +41,7 @@ jobs:
             debian:trixie \
             bash -euc '
               apt-get update
-              apt-get install -y --no-install-recommends bash live-build
+              apt-get install -y --no-install-recommends bash live-build grub-common
               bash /workspace/scripts/validate-live-build-config.sh
             '
       - run: cargo fmt --all -- --check

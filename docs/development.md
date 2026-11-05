@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Rust stable toolchain and Cargo.
+- Rust 1.90+ toolchain and Cargo (the native Tauri shell uses the current Tauri shell plugin).
 - Node.js 20+ and npm.
 - Git.
 - For native Tauri builds on Debian/Ubuntu: libwebkit2gtk-4.1-dev, build-essential, curl, wget, file, libxdo-dev, libssl-dev, libayatana-appindicator3-dev and librsvg2-dev.
@@ -48,7 +48,7 @@ npm run build
 npm run desktop:build
 ~~~
 
-CI runs Rust format/test/Clippy and builds the frontend and native Linux desktop package.
+CI runs Rust format/test/Clippy and builds the frontend and native Linux Debian package, including icon generation and the daemon sidecar.
 
 ## Build the bootable image
 

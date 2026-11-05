@@ -12,7 +12,7 @@ permissions:
 jobs:
   rust:
     name: Rust checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -24,13 +24,28 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   shell:
-    name: Shell checks
-    runs-on: ubuntu-latest
+    name: Shell and native desktop checks
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl wget file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
       - run: npm install
       - run: npm run typecheck
       - run: npm run build
+      - name: Build the native Linux desktop package
+        run: npm run desktop:build
+      - name: Verify the Debian package exists
+        run: test -n "$(find apps/shell/src-tauri/target/release/bundle/deb -maxdepth 1 -name '*.deb' -print -quit)"

@@ -1,0 +1,87 @@
+name: Build NOVA ISO
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nova-iso-build
+  cancel-in-progress: false
+
+jobs:
+  build-image:
+    name: Build NOVA live installer (amd64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install native desktop and ISO builder dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential curl wget file \
+            libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev \
+            live-build debootstrap squashfs-tools xorriso \
+            grub-pc-bin grub-efi-amd64-bin mtools dosfstools \
+            isolinux syslinux-common
+
+      - name: Verify Rust source
+        run: |
+          cargo fmt --all -- --check
+          cargo test --workspace
+          cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Install JavaScript dependencies
+        run: npm install
+
+      - name: Build and verify the native NOVA desktop package
+        run: |
+          npm run typecheck
+          npm run build
+          npm run desktop:build
+          test -n "$(find apps/shell/src-tauri/target/release/bundle/deb -maxdepth 1 -name '*.deb' -print -quit)"
+
+      - name: Build NOVA host daemon
+        run: cargo build --release -p nova-daemon
+
+      - name: Stage NOVA components into Debian live-build
+        run: |
+          install -D -m 0755 target/release/nova-daemon \
+            os/debian-live/config/includes.chroot/usr/local/bin/nova-daemon
+          mkdir -p os/debian-live/config/packages.chroot
+          find apps/shell/src-tauri/target/release/bundle/deb -maxdepth 1 -name '*.deb' -exec cp {} os/debian-live/config/packages.chroot/ \;
+          test -s os/debian-live/config/includes.chroot/usr/local/bin/nova-daemon
+          test -n "$(find os/debian-live/config/packages.chroot -maxdepth 1 -name '*.deb' -print -quit)"
+
+      - name: Build bootable NOVA ISO
+        run: sudo bash os/debian-live/build.sh
+
+      - name: Verify ISO structure and generate checksum
+        run: |
+          ISO="os/debian-live/live-image-amd64.hybrid.iso"
+          test -s "$ISO"
+          file "$ISO"
+          xorriso -indev "$ISO" -report_el_torito as_mkisofs
+          sha256sum "$ISO" | tee "$ISO.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NOVA-OS-amd64-experimental
+          path: |
+            os/debian-live/live-image-amd64.hybrid.iso
+            os/debian-live/live-image-amd64.hybrid.iso.sha256
+          if-no-files-found: error
+          retention-days: 14

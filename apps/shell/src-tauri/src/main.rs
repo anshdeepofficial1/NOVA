@@ -3,7 +3,7 @@
 use std::{
     io::{Read, Write},
     net::{SocketAddr, TcpStream},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use tauri::Manager;
@@ -38,6 +38,22 @@ fn nova_daemon_is_healthy() -> bool {
     let response = String::from_utf8_lossy(&response);
     response.starts_with("HTTP/1.1 200")
         && response.contains("\"service\":\"nova-daemon\"")
+}
+
+/// Give the desktop autostart service time to win the login-session race
+/// before starting a bundled sidecar. This avoids two daemons contending for
+/// the same loopback port when KDE launches both at session startup.
+fn wait_for_existing_daemon() -> bool {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if wait_for_existing_daemon() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
 }
 
 fn main() {

@@ -5,6 +5,11 @@ on:
     branches: [main]
     paths:
       - "os/debian-live/**"
+      - "apps/shell/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "package.json"
+      - "scripts/stage-sidecar.sh"
       - "scripts/validate-live-build-config.sh"
       - "scripts/validate-iso.sh"
       - "scripts/smoke-iso-qemu.sh"
@@ -16,7 +21,7 @@ permissions:
 
 concurrency:
   group: nova-iso-build
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build-image:

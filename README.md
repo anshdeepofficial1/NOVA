@@ -1,115 +1,119 @@
 # NOVA OS
 
-NOVA is an ambitious hybrid desktop and cloud operating-system project. The first milestone is a safe, testable control plane and desktop-shell prototype that can grow into a bootable Linux distribution.
+NOVA is a hybrid operating-system project: a bootable Linux desktop for physical PCs, a native desktop workspace, application compatibility runtimes, and a separately deployed cloud-workspace service.
 
-> **Project status: early foundation / experimental.** This repository does not yet contain a bootable OS image or working Android, Windows, or macOS application runtimes. The compatibility planner identifies the correct execution path; it does not claim that every app can run.
+> **Status: experimental foundation.** The repository now contains a Debian live-image recipe, a native Tauri desktop app, a Rust host API and runtime-prerequisite discovery. The ISO build workflow has been added but an ISO has not yet passed a full build-and-VM acceptance cycle. APK/EXE/DMG execution, cloud workspaces and a production NOVA compositor are not complete.
 
-## Product direction
+## Product architecture
 
-NOVA aims to provide one desktop experience for:
+The first PC target is **Debian 13 (Trixie), amd64, KDE Plasma/Wayland**. This uses a maintained Linux kernel, driver stack, package ecosystem and Debian Installer live mode rather than starting with a custom kernel or bootloader.
 
-- Native Linux applications and packages.
-- Android applications through a compatible Android container (planned: Waydroid).
-- Windows applications through Wine/Proton where compatible, with an optional licensed Windows VM for other cases.
-- Web applications and PWAs.
-- macOS applications only through a properly licensed macOS environment on eligible Apple hardware. A DMG is a disk-image installer, not a universal executable format.
-- Local and remote/cloud workspaces, with explicit user consent for remote execution.
+NOVA is split into these layers:
 
-No compatibility layer can guarantee every application. NOVA will show capability and confidence honestly, and never silently route untrusted installers to privileged execution.
+1. **NOVA OS image** — reproducible Debian live-build configuration, KDE desktop, firmware and a live installer.
+2. **NOVA Desktop** — native Tauri application whose interface is React + TypeScript.
+3. **NOVA Host Service** — Rust/Axum API, bound to loopback, that reports host details and inspects compatibility hints.
+4. **Runtime integrations** — native Debian/Flatpak, Waydroid, Wine/Proton, QEMU/KVM and browser/PWA. Presence is detected; execution and app-specific compatibility are separate milestones.
+5. **NOVA Cloud** — future isolated compute, identity, encrypted storage and remote-session gateway.
 
-## Repository layout
+A website cannot directly execute arbitrary APK, EXE or DMG files on the user's device. NOVA Desktop and its local host service are the bridge to actual host capabilities; NOVA Cloud is the route for remote workloads.
 
-```text
+## Repository structure
+
+~~~text
 .
-├── apps/
-│   └── shell/             # React + TypeScript desktop-shell prototype
+├── apps/shell/                  # React UI + Tauri native desktop app
 ├── crates/
-│   ├── nova-core/         # Shared domain types and compatibility planner
-│   └── nova-daemon/       # Local host API (Axum)
-├── docs/
-│   ├── architecture.md
-│   ├── compatibility.md
-│   ├── security.md
-│   └── development.md
-├── scripts/
-│   └── check-host.sh
-├── .github/workflows/ci.yml
-├── Cargo.toml
-└── package.json
-```
+│   ├── nova-core/              # Pure compatibility planning and package classification
+│   └── nova-daemon/             # Rust loopback API and host capability detection
+├── os/debian-live/              # Debian Trixie amd64 live ISO configuration
+├── docs/                        # Architecture, compatibility, security and development
+├── scripts/                     # Host development checks
+└── .github/workflows/
+    ├── ci.yml                   # Rust, frontend and native desktop package CI
+    └── build-iso.yml             # Manual bootable ISO build
+~~~
 
-## Current capabilities
+## Implemented in this repository
 
-- Rust compatibility inspection for APK, EXE/MSI, DMG, DEB, AppImage, and web URLs.
-- Deterministic runtime planning with explicit experimental/unsupported states.
-- Local daemon endpoints for health, system capability reporting, and package inspection.
-- A browser-based NOVA shell prototype that connects to the local daemon.
-- Rust unit tests and frontend type/build checks in CI.
+- Rust package-hint inspection for APK, EXE, MSI, DMG, PKG, DEB, AppImage, RPM, Flatpak references and HTTP(S) URLs.
+- A compatibility planner that returns a runtime choice and an honest status; it never launches a file.
+- Host discovery for OS/kernel, distribution, session type, package manager, Flatpak, Waydroid, Wayland/Binder prerequisites, Wine, QEMU/KVM and browser executables.
+- Loopback-only Axum API with an 8 KiB request-body limit.
+- Native Tauri desktop package configuration and React shell.
+- Debian Trixie live-build recipe with KDE, live installer, Waydroid backports, Wine, QEMU/KVM, Flatpak and NOVA components.
+- Per-user systemd service for the local NOVA daemon in the image.
+- Automated Rust, frontend and native desktop CI; manual ISO build workflow.
 
 ## Not implemented yet
 
-- Kernel, bootloader, installer, disk partitioning, and bootable ISO.
-- Production Wayland compositor / window manager and native desktop integration.
-- Waydroid installation, Android image management, Google service compatibility, or APK execution.
-- Wine/Proton prefix management, Windows executable launch, or Windows VM provisioning.
-- macOS VM execution; this is subject to Apple hardware and software licensing.
-- Cloud desktop infrastructure, remote GPU streaming, account sync, and production app store.
-- Privileged device management, updates, recovery, and secure-boot integration.
+- A release-quality ISO validated on physical PCs and a VM test matrix.
+- A custom NOVA Wayland compositor, window manager, login manager or full desktop session. The first image uses KDE Plasma.
+- Install/launch adapters for APK, EXE/MSI, DEB, AppImage or Flatpak.
+- Waydroid image provisioning, Android app lifecycle, Google Play certification or DRM/Play Integrity guarantees.
+- Wine/Proton prefix management and app-specific compatibility database; Windows VM lifecycle and Windows licensing workflow.
+- A production installer with tested Btrfs subvolume layout, Snapper snapshots and recovery UX.
+- Cloud broker, multi-tenant isolation, remote GPU streaming, sync and account service.
+- macOS runtime. DMG/PKG are macOS formats and are not executable on the Linux image.
+- AI system assistant with permission-scoped actions.
 
-These are separate engineering milestones. The UI or planner must not imply that a runtime works until a real end-to-end integration test passes.
+## Run NOVA locally
 
-## Requirements
+Requirements: Rust stable, Node.js 20+, npm and Git. For Tauri on Debian/Ubuntu, install the native dependencies from the [official Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 
-- Rust stable toolchain (edition 2021)
-- Node.js 20+ and npm
-- Linux is the intended host for future OS/runtime work. The API and shell prototype can be developed on other platforms.
+Terminal 1 — start the host service:
 
-## Development
-
-Start the host API:
-
-```bash
+~~~bash
 cargo run -p nova-daemon
-```
+~~~
 
-In another terminal, start the shell:
+Terminal 2 — start the browser development shell:
 
-```bash
+~~~bash
 npm install
 npm run dev
-```
+~~~
 
-The shell expects the local API at `http://127.0.0.1:47820`. The daemon enables permissive CORS for localhost development only; production deployment must use an authenticated, origin-restricted IPC/API boundary.
+To run the native desktop window instead:
 
-Run checks:
+~~~bash
+npm run desktop:dev
+~~~
 
-```bash
+Build the native Linux package:
+
+~~~bash
+npm run desktop:build
+~~~
+
+The shell expects the local daemon at http://127.0.0.1:47820. The daemon is deliberately read-only today: capability lookup and package planning only. It does not install software, call a shell, start a VM or execute a selected file.
+
+## Build the bootable image
+
+See [os/debian-live/README.md](os/debian-live/README.md). A manual GitHub build is available under **Actions → Build NOVA ISO → Run workflow**. It uploads the ISO and SHA-256 checksum when a build succeeds.
+
+Do not install an experimental image on a machine containing important data. Test the live session and installer in a disposable VM first.
+
+## Validate changes
+
+~~~bash
 cargo fmt --all -- --check
 cargo test --workspace
-npm ci
+cargo clippy --workspace --all-targets -- -D warnings
+npm run typecheck
 npm run build
-```
+npm run desktop:build
+~~~
 
-## Safety boundary
+## Engineering and safety principles
 
-The current API only inspects package metadata and returns a runtime plan. It does **not** execute uploaded files, invoke a shell, install packages, elevate privileges, or start VMs/containers. Do not add arbitrary file execution to the daemon. Runtime adapters must be isolated, capability-checked, permission-gated, auditable, and tested against malicious input.
+- Never claim universal APK/EXE/DMG compatibility.
+- Never execute arbitrary installer contents as root.
+- Keep all privileged host functionality out of the UI process.
+- Create sandboxed runtime adapters with explicit permissions and resource limits.
+- Treat file extensions as hints, not proof of file format or trust.
+- Mark runtimes available only after real end-to-end tests for app/version/host/architecture.
+- Use signed upstream packages, dependency pinning, SBOMs, automated tests, recovery and vulnerability response.
+- Build on upstream Linux/runtime projects and preserve their licenses and notices.
 
-## Roadmap
-
-1. **Foundation:** shared domain model, daemon API, shell prototype, CI and threat model.
-2. **Linux desktop:** choose a stable base distribution, boot flow, Wayland compositor, drivers, settings, file manager and atomic update/recovery strategy.
-3. **Linux apps:** native package handling and sandboxed application packaging.
-4. **Android:** Waydroid integration on supported kernels/graphics stacks; validate Binder, GPU, audio and input.
-5. **Windows:** Wine/Proton management, compatibility profiles and licensed VM fallback.
-6. **Cloud:** secure remote sessions, WebRTC streaming, identity, storage and billing controls.
-7. **macOS:** investigate only compliant Apple-hardware workflows and licensing; no Hackintosh workaround.
-
-## Contribution principles
-
-- Build in small, reviewable increments.
-- Keep privileged code minimal and separate from the UI.
-- Add tests for every compatibility decision and failure path.
-- Never report a runtime as supported without reproducible test evidence.
-- Use upstream projects rather than copying large third-party codebases into NOVA. Preserve upstream licenses and notices.
-
-See [docs/architecture.md](docs/architecture.md), [docs/compatibility.md](docs/compatibility.md), [docs/security.md](docs/security.md), and [docs/development.md](docs/development.md).
+See [architecture](docs/architecture.md), [compatibility policy](docs/compatibility.md), [security model](docs/security.md), [development guide](docs/development.md) and the [ISO builder](os/debian-live/README.md).

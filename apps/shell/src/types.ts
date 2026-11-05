@@ -4,6 +4,7 @@ export interface RuntimeStatus {
   id: string;
   state: string;
   note: string;
+  executable?: string | null;
 }
 
 export interface SystemInfo {
@@ -12,6 +13,9 @@ export interface SystemInfo {
   host_os: string;
   architecture: string;
   api_version: string;
+  kernel_release: string;
+  distribution: string;
+  session_type: string;
   runtimes: RuntimeStatus[];
 }
 

@@ -6,6 +6,7 @@ use axum::{
     Router,
 };
 use nova_core::{inspect_input, CompatibilityPlan, PlanError};
+mod capabilities;
 use serde::{Deserialize, Serialize};
 use std::{env, net::SocketAddr};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
@@ -19,20 +20,16 @@ struct HealthResponse {
 }
 
 #[derive(Serialize)]
-struct RuntimeStatus {
-    id: &'static str,
-    state: &'static str,
-    note: &'static str,
-}
-
-#[derive(Serialize)]
 struct SystemResponse {
     product: &'static str,
     version: &'static str,
     host_os: &'static str,
     architecture: &'static str,
     api_version: &'static str,
-    runtimes: Vec<RuntimeStatus>,
+    kernel_release: String,
+    distribution: String,
+    session_type: String,
+    runtimes: Vec<capabilities::RuntimeStatus>,
 }
 
 #[derive(Deserialize)]
@@ -78,39 +75,17 @@ async fn system_info() -> Json<SystemResponse> {
         "other"
     };
 
+    let report = capabilities::inspect_host();
     Json(SystemResponse {
         product: "NOVA OS",
         version: env!("CARGO_PKG_VERSION"),
         host_os,
         architecture,
         api_version: "v1",
-        runtimes: vec![
-            RuntimeStatus {
-                id: "linux-native",
-                state: "planned",
-                note: "Package installation and safe launch service are not integrated.",
-            },
-            RuntimeStatus {
-                id: "android-waydroid",
-                state: "not_integrated",
-                note: "Requires a supported Linux kernel, Waydroid image and graphics stack.",
-            },
-            RuntimeStatus {
-                id: "windows-wine",
-                state: "not_integrated",
-                note: "Wine/Proton management and per-app validation are not integrated.",
-            },
-            RuntimeStatus {
-                id: "macos",
-                state: "unavailable",
-                note: "No macOS runtime; any future workflow must follow Apple's license.",
-            },
-            RuntimeStatus {
-                id: "web-pwa",
-                state: "planned",
-                note: "The shell is a web prototype; browser app management is not integrated.",
-            },
-        ],
+        kernel_release: report.kernel_release,
+        distribution: report.distribution,
+        session_type: report.session_type,
+        runtimes: report.runtimes,
     })
 }
 
@@ -159,6 +134,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let allowed_origins = [
         HeaderValue::from_static("http://localhost:5173"),
         HeaderValue::from_static("http://127.0.0.1:5173"),
+        HeaderValue::from_static("tauri://localhost"),
+        HeaderValue::from_static("http://tauri.localhost"),
     ];
 
     let cors = CorsLayer::new()

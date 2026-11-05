@@ -235,7 +235,7 @@ run_firmware_test() {
   args+=( -monitor "unix:$monitor_socket,server=on,wait=off" )
 
   echo "Boot smoke test: $mode"
-  timeout --signal=TERM "$TIMEOUT_SECONDS" "$QEMU_BIN" -machine "$machine" "${args[@]}" > "$qemu_log" 2>&1 &
+  timeout --signal=TERM "$((TIMEOUT_SECONDS + 30))" "$QEMU_BIN" -machine "$machine" "${args[@]}" > "$qemu_log" 2>&1 &
   QEMU_PID=$!
 
   while (( elapsed < TIMEOUT_SECONDS )); do

@@ -187,7 +187,9 @@ pub fn authorize_launch<V: ApprovalVerifier>(
         return Err(PolicyError::ApprovalExpired);
     }
     if grant.app_id != request.app_id
-        || !grant.artifact_sha256.eq_ignore_ascii_case(&request.artifact_sha256)
+        || !grant
+            .artifact_sha256
+            .eq_ignore_ascii_case(&request.artifact_sha256)
     {
         return Err(PolicyError::ApprovalSubjectMismatch);
     }
@@ -229,9 +231,7 @@ pub fn authorize_launch<V: ApprovalVerifier>(
     })
 }
 
-fn unique_permissions(
-    permissions: &[Permission],
-) -> Result<BTreeSet<Permission>, PolicyError> {
+fn unique_permissions(permissions: &[Permission]) -> Result<BTreeSet<Permission>, PolicyError> {
     let set: BTreeSet<_> = permissions.iter().copied().collect();
     if set.len() != permissions.len() {
         return Err(PolicyError::PermissionNotApproved);
@@ -309,8 +309,14 @@ mod tests {
 
     #[test]
     fn creates_a_default_deny_plan_after_verified_consent() {
-        let plan = authorize_launch(&request(), &runtime(), &grant(), &AcceptTestSignature, 1_000)
-            .expect("policy should approve this bounded request");
+        let plan = authorize_launch(
+            &request(),
+            &runtime(),
+            &grant(),
+            &AcceptTestSignature,
+            1_000,
+        )
+        .expect("policy should approve this bounded request");
 
         assert!(plan.sandbox.no_new_privileges);
         assert!(plan.sandbox.host_root_read_only);
@@ -325,7 +331,13 @@ mod tests {
         let mut descriptor = runtime();
         descriptor.state = RuntimeState::Detected;
         assert_eq!(
-            authorize_launch(&request(), &descriptor, &grant(), &AcceptTestSignature, 1_000),
+            authorize_launch(
+                &request(),
+                &descriptor,
+                &grant(),
+                &AcceptTestSignature,
+                1_000
+            ),
             Err(PolicyError::RuntimeNotReady)
         );
     }
@@ -335,14 +347,26 @@ mod tests {
         let mut expired = grant();
         expired.expires_at_unix = 1_000;
         assert_eq!(
-            authorize_launch(&request(), &runtime(), &expired, &AcceptTestSignature, 1_000),
+            authorize_launch(
+                &request(),
+                &runtime(),
+                &expired,
+                &AcceptTestSignature,
+                1_000
+            ),
             Err(PolicyError::ApprovalExpired)
         );
 
         let mut mismatched = grant();
         mismatched.artifact_sha256 = "b".repeat(64);
         assert_eq!(
-            authorize_launch(&request(), &runtime(), &mismatched, &AcceptTestSignature, 999),
+            authorize_launch(
+                &request(),
+                &runtime(),
+                &mismatched,
+                &AcceptTestSignature,
+                999
+            ),
             Err(PolicyError::ApprovalSubjectMismatch)
         );
     }
@@ -352,14 +376,26 @@ mod tests {
         let mut insufficient = grant();
         insufficient.approved_permissions = vec![Permission::WriteAppData];
         assert_eq!(
-            authorize_launch(&request(), &runtime(), &insufficient, &AcceptTestSignature, 1_000),
+            authorize_launch(
+                &request(),
+                &runtime(),
+                &insufficient,
+                &AcceptTestSignature,
+                1_000
+            ),
             Err(PolicyError::PermissionNotApproved)
         );
 
         let mut descriptor = runtime();
         descriptor.supported_permissions = vec![Permission::WriteAppData];
         assert_eq!(
-            authorize_launch(&request(), &descriptor, &grant(), &AcceptTestSignature, 1_000),
+            authorize_launch(
+                &request(),
+                &descriptor,
+                &grant(),
+                &AcceptTestSignature,
+                1_000
+            ),
             Err(PolicyError::PermissionNotSupported)
         );
     }
@@ -369,28 +405,52 @@ mod tests {
         let mut bad_signature = grant();
         bad_signature.signature.clear();
         assert_eq!(
-            authorize_launch(&request(), &runtime(), &bad_signature, &AcceptTestSignature, 1_000),
+            authorize_launch(
+                &request(),
+                &runtime(),
+                &bad_signature,
+                &AcceptTestSignature,
+                1_000
+            ),
             Err(PolicyError::InvalidApprovalSignature)
         );
 
         let mut bad_id = request();
         bad_id.app_id = "not-valid".to_owned();
         assert_eq!(
-            authorize_launch(&bad_id, &runtime(), &grant(), &AcceptTestSignature, 1_000),
+            authorize_launch(
+                &bad_id,
+                &runtime(),
+                &grant(),
+                &AcceptTestSignature,
+                1_000
+            ),
             Err(PolicyError::InvalidAppId)
         );
 
         let mut bad_digest = request();
         bad_digest.artifact_sha256 = "not-a-digest".to_owned();
         assert_eq!(
-            authorize_launch(&bad_digest, &runtime(), &grant(), &AcceptTestSignature, 1_000),
+            authorize_launch(
+                &bad_digest,
+                &runtime(),
+                &grant(),
+                &AcceptTestSignature,
+                1_000
+            ),
             Err(PolicyError::InvalidArtifactDigest)
         );
 
         let mut bad_limits = request();
         bad_limits.memory_mib = 0;
         assert_eq!(
-            authorize_launch(&bad_limits, &runtime(), &grant(), &AcceptTestSignature, 1_000),
+            authorize_launch(
+                &bad_limits,
+                &runtime(),
+                &grant(),
+                &AcceptTestSignature,
+                1_000
+            ),
             Err(PolicyError::InvalidResourceLimits)
         );
     }
@@ -400,7 +460,13 @@ mod tests {
         let mut duplicate = request();
         duplicate.requested_permissions.push(Permission::Network);
         assert_eq!(
-            authorize_launch(&duplicate, &runtime(), &grant(), &AcceptTestSignature, 1_000),
+            authorize_launch(
+                &duplicate,
+                &runtime(),
+                &grant(),
+                &AcceptTestSignature,
+                1_000
+            ),
             Err(PolicyError::PermissionNotApproved)
         );
     }

@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="120" y1="80" x2="900" y2="940" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#91A9FF"/>
+      <stop offset=".48" stop-color="#526DDB"/>
+      <stop offset="1" stop-color="#202E69"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="290" y1="250" x2="740" y2="760" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#DCE6FF"/>
+    </linearGradient>
+    <filter id="shadow" x="120" y="120" width="784" height="784" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feGaussianBlur stdDeviation="26"/>
+    </filter>
+  </defs>
+  <rect x="72" y="72" width="880" height="880" rx="224" fill="#111A3B" opacity=".42" filter="url(#shadow)"/>
+  <rect x="64" y="64" width="896" height="896" rx="224" fill="url(#bg)"/>
+  <path d="M512 156c197 0 356 159 356 356S709 868 512 868 156 709 156 512 315 156 512 156Z" fill="none" stroke="#DDE6FF" stroke-opacity=".17" stroke-width="3"/>
+  <path d="M284 734V290h100l256 295V290h100v444H640L384 440v294H284Z" fill="url(#mark)"/>
+  <path d="M222 512c0-160 130-290 290-290" fill="none" stroke="#FFFFFF" stroke-opacity=".36" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="512" cy="222" r="14" fill="#FFFFFF"/>
+  <circle cx="802" cy="512" r="14" fill="#AFC2FF"/>
+  <circle cx="512" cy="802" r="14" fill="#AFC2FF"/>
+</svg>

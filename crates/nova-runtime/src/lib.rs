@@ -418,13 +418,7 @@ mod tests {
         let mut bad_id = request();
         bad_id.app_id = "not-valid".to_owned();
         assert_eq!(
-            authorize_launch(
-                &bad_id,
-                &runtime(),
-                &grant(),
-                &AcceptTestSignature,
-                1_000
-            ),
+            authorize_launch(&bad_id, &runtime(), &grant(), &AcceptTestSignature, 1_000),
             Err(PolicyError::InvalidAppId)
         );
 

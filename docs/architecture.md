@@ -22,6 +22,7 @@ The image recipe is in os/debian-live. It is an experimental configuration; only
 1. **Hardware and Linux base** — firmware, Linux kernel, drivers, bootloader, systemd, storage, power and networking.
 2. **Graphics/session** — KDE Plasma and KWin Wayland for the first image. A NOVA compositor is a later, separate project with input, multi-output, accessibility, scaling and GPU requirements.
 3. **NOVA Host Service** — Rust API for read-only host capability discovery and compatibility planning today. Future services will manage runtimes, permissions, updates and recovery through narrow interfaces.
+4. **NOVA Runtime Policy** — a separate Rust crate validates app/artifact-bound approval grants, supported permissions, runtime readiness and resource bounds before producing a default-deny sandbox plan.
 4. **Runtime adapters** — native Linux packages, Flatpak, Waydroid, Wine/Proton, QEMU/KVM and browser/PWA.
 5. **NOVA Desktop** — Tauri native window hosting React + TypeScript. This is an application/workspace, not a replacement for KWin or the desktop session.
 6. **NOVA Cloud** — future identity, workspace broker, isolated per-user VMs/containers, encrypted storage, signaling and remote session streaming.
@@ -87,4 +88,6 @@ A runtime adapter should implement:
 7. Start, health-check, stop and clean up with bounded time/resources.
 8. Return a typed, auditable result and diagnostic bundle without secrets.
 
-No UI component should construct arbitrary shell commands or directly access a privileged runtime.
+No UI component should construct arbitrary shell commands or directly access a privileged runtime. The current policy crate does not launch applications; a production signature signer/verifier and independently reviewed runtime adapters are still required.
+
+See [docs/runtime-adapters.md](runtime-adapters.md) for the consent, policy and adapter contract.

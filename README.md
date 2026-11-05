@@ -96,7 +96,7 @@ The native Tauri app waits briefly for the NOVA user service and reuses it when 
 
 ## Build the bootable image
 
-See [os/debian-live/README.md](os/debian-live/README.md). A manual GitHub build is available under **Actions → Build NOVA ISO → Run workflow**. It uploads the ISO and SHA-256 checksum when a build succeeds.
+See [os/debian-live/README.md](os/debian-live/README.md). A manual GitHub build is available under **Actions → Build NOVA ISO → Run workflow**. It uploads the ISO and SHA-256 checksum when a build succeeds. After downloading the artifact, use `bash scripts/test-iso-qemu.sh --firmware uefi` to boot it in a disposable VM with a separate virtual disk.
 
 Do not install an experimental image on a machine containing important data. Test the live session and installer in a disposable VM first.
 

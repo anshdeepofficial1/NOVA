@@ -13,6 +13,7 @@ on:
       - "scripts/validate-live-build-config.sh"
       - "scripts/validate-iso.sh"
       - "scripts/smoke-iso-qemu.sh"
+      - "scripts/test-smoke-iso-qemu.sh"
       - ".github/workflows/build-iso.yml"
   workflow_dispatch:
 
@@ -60,6 +61,18 @@ jobs:
           cargo test --workspace
           cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: Validate shell scripts and QEMU harness behavior
+        run: |
+          for script in \
+            os/debian-live/build.sh \
+            scripts/validate-live-build-config.sh \
+            scripts/validate-iso.sh \
+            scripts/smoke-iso-qemu.sh \
+            scripts/test-smoke-iso-qemu.sh; do
+            bash -n "$script"
+          done
+          bash scripts/test-smoke-iso-qemu.sh
+
       - name: Install JavaScript dependencies
         run: npm install
 
@@ -93,18 +106,27 @@ jobs:
               apt-get install -y --no-install-recommends \
                 bash ca-certificates file git \
                 live-build debootstrap squashfs-tools xorriso \
-                grub-pc-bin grub-efi-amd64-bin mtools dosfstools \
+                grub-common grub-pc-bin grub-efi-amd64-bin mtools dosfstools sbsigntool \
                 isolinux syslinux-common debian-archive-keyring
               bash os/debian-live/build.sh
             '
 
-      - name: Boot-test both BIOS and UEFI paths in disposable QEMU guests
+      - name: Boot-test BIOS, standard UEFI and Secure Boot UEFI
         run: |
           sudo bash scripts/smoke-iso-qemu.sh \
             --iso os/debian-live/live-image-amd64.hybrid.iso \
-            --firmware both \
-            --timeout-seconds 1800 \
+            --firmware all \
+            --timeout-seconds 900 \
             --log-dir os/debian-live/validation/qemu
+
+      - name: Upload compact boot diagnostics and screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: NOVA-ISO-boot-diagnostics
+          path: os/debian-live/validation/
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload ISO, checksum, build manifest and test evidence
         if: always()

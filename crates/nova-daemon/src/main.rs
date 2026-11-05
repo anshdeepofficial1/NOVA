@@ -1,5 +1,5 @@
 use axum::{
-    extract::Json,
+    extract::{DefaultBodyLimit, Json},
     http::{header, HeaderValue, Method, StatusCode},
     response::IntoResponse,
     routing::{get, post},
@@ -162,6 +162,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/health", get(health))
         .route("/api/system", get(system_info))
         .route("/api/compatibility/inspect", post(inspect))
+        .layer(DefaultBodyLimit::max(8 * 1024))
         .layer(cors)
         .layer(TraceLayer::new_for_http());
 

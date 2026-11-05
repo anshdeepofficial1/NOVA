@@ -132,7 +132,13 @@ async fn inspect(Json(request): Json<InspectRequest>) -> impl IntoResponse {
                 }
                 PlanError::EmptyInput => StatusCode::BAD_REQUEST,
             };
-            (status, Json(ErrorResponse { error: error.to_string() })).into_response()
+            (
+                status,
+                Json(ErrorResponse {
+                    error: error.to_string(),
+                }),
+            )
+                .into_response()
         }
     }
 }
@@ -140,7 +146,9 @@ async fn inspect(Json(request): Json<InspectRequest>) -> impl IntoResponse {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .init();
 
     // Bind to loopback only. Do not expose a privileged host API to the LAN.

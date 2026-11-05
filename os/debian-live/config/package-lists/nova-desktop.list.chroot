@@ -1,0 +1,63 @@
+# Display and Wayland desktop
+kde-plasma-desktop
+plasma-workspace-wayland
+kwin-wayland
+sddm
+dolphin
+konsole
+systemsettings
+plasma-nm
+
+# Network, browser, media and hardware discovery
+network-manager
+firefox-esr
+pipewire-audio
+pipewire-pulse
+wireplumber
+alsa-utils
+pciutils
+usbutils
+lshw
+mesa-utils
+firmware-linux
+firmware-linux-free
+fonts-noto-core
+fonts-noto-color-emoji
+
+# Native Linux application ecosystem
+flatpak
+plasma-discover
+plasma-discover-backend-flatpak
+fuse3
+bubblewrap
+
+# Android container (Trixie backports is configured separately).
+waydroid
+
+# Windows compatibility and optional full-OS virtualization.
+wine
+winetricks
+qemu-system-x86
+qemu-utils
+libvirt-daemon-system
+libvirt-clients
+virt-manager
+
+# Filesystem tools for a future tested rollback layout.
+btrfs-progs
+snapper
+
+# Installer, firmware, diagnostics and development utilities.
+debian-installer-launcher
+debian-archive-keyring
+live-config-systemd
+network-manager-openvpn
+curl
+wget
+git
+sudo
+ca-certificates
+openssh-client
+zram-tools
+apparmor
+apparmor-utils

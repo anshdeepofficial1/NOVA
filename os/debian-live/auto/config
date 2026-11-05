@@ -1,0 +1,25 @@
+#!/bin/sh
+set -eu
+
+# Debian Live's auto/config is re-entered through "lb config noauto" to
+# prevent recursion. Extra arguments at the end intentionally allow CI and
+# local maintainers to override defaults for controlled experiments.
+lb config noauto \
+  --mode debian \
+  --architectures amd64 \
+  --distribution trixie \
+  --binary-images iso-hybrid \
+  --archive-areas "main contrib non-free non-free-firmware" \
+  --debian-installer live \
+  --debian-installer-gui true \
+  --debian-installer-distribution trixie \
+  --firmware-binary true \
+  --firmware-chroot true \
+  --apt-recommends true \
+  --updates true \
+  --uefi-secure-boot auto \
+  --iso-application "NOVA OS" \
+  --iso-publisher "NOVA Project" \
+  --iso-volume "NOVA_OS_0_1" \
+  --bootappend-live "boot=live components hostname=nova username=nova locales=en_US.UTF-8 keyboard-layouts=us" \
+  "$@"

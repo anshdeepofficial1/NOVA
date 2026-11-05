@@ -89,11 +89,22 @@ else
   qemu-img create -f qcow2 "$DISK" "${DISK_GIB}G"
 fi
 
+ACCEL="tcg"
+CPU_MODEL="max"
+if [[ -r /dev/kvm && -w /dev/kvm ]]; then
+  ACCEL="kvm"
+  CPU_MODEL="host"
+  echo "Acceleration: KVM"
+else
+  echo "Acceleration: TCG software emulation (slower)"
+fi
+
 QEMU_ARGS=(
   -machine q35
+  -accel "$ACCEL"
+  -cpu "$CPU_MODEL"
   -m "$MEMORY_MIB"
   -smp "$CPUS"
-  -cpu max
   -cdrom "$ISO"
   -boot order=d,menu=on
   -drive "file=$DISK,if=virtio,format=qcow2"
@@ -104,14 +115,6 @@ QEMU_ARGS=(
   -serial mon:stdio
   -rtc base=utc
 )
-
-if [[ -r /dev/kvm && -w /dev/kvm ]]; then
-  QEMU_ARGS+=(-accel kvm -cpu host)
-  echo "Acceleration: KVM"
-else
-  QEMU_ARGS+=(-accel tcg)
-  echo "Acceleration: TCG software emulation (slower)"
-fi
 
 TEMP_VARS=""
 cleanup() {

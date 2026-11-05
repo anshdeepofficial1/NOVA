@@ -1,6 +1,5 @@
 # Display and Wayland desktop
 kde-plasma-desktop
-plasma-workspace-wayland
 kwin-wayland
 sddm
 dolphin

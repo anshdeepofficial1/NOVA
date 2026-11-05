@@ -39,6 +39,7 @@ A website cannot directly execute arbitrary APK, EXE or DMG files on the user's 
 - Rust package-hint inspection for APK, EXE, MSI, DMG, PKG, DEB, AppImage, RPM, Flatpak references and HTTP(S) URLs.
 - A compatibility planner that returns a runtime choice and an honest status; it never launches a file.
 - Host discovery for OS/kernel, distribution, session type, package manager, Flatpak, Waydroid, Wayland/Binder prerequisites, Wine, QEMU/KVM and browser executables.
+- Runtime policy crate that requires a verified, app-and-artifact-bound approval grant, supported permissions, runtime readiness and bounded resource limits before it can produce a default-deny sandbox plan.
 - Loopback-only Axum API with an 8 KiB request-body limit.
 - Native Tauri desktop package configuration and React shell.
 - Debian Trixie live-build recipe with KDE, live installer, Waydroid backports, Wine, QEMU/KVM, Flatpak and NOVA components.
@@ -49,7 +50,8 @@ A website cannot directly execute arbitrary APK, EXE or DMG files on the user's 
 
 - A release-quality ISO validated on physical PCs and a VM test matrix.
 - A custom NOVA Wayland compositor, window manager, login manager or full desktop session. The first image uses KDE Plasma.
-- Install/launch adapters for APK, EXE/MSI, DEB, AppImage or Flatpak.
+- Production install/launch adapters for APK, EXE/MSI, DEB, AppImage or Flatpak.
+- Production cryptographic approval signer/verifier and secure key storage. The policy crate currently provides the fail-closed contract and a test verifier only.
 - Waydroid image provisioning, Android app lifecycle, Google Play certification or DRM/Play Integrity guarantees.
 - Wine/Proton prefix management and app-specific compatibility database; Windows VM lifecycle and Windows licensing workflow.
 - A production installer with tested Btrfs subvolume layout, Snapper snapshots and recovery UX.
@@ -116,4 +118,4 @@ npm run desktop:build
 - Use signed upstream packages, dependency pinning, SBOMs, automated tests, recovery and vulnerability response.
 - Build on upstream Linux/runtime projects and preserve their licenses and notices.
 
-See [architecture](docs/architecture.md), [compatibility policy](docs/compatibility.md), [security model](docs/security.md), [development guide](docs/development.md) and the [ISO builder](os/debian-live/README.md).
+See [architecture](docs/architecture.md), [compatibility policy](docs/compatibility.md), [runtime-adapter policy](docs/runtime-adapters.md), [security model](docs/security.md), [development guide](docs/development.md) and the [ISO builder](os/debian-live/README.md).

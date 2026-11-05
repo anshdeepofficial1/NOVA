@@ -4,6 +4,7 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "$0")/.." && pwd)"
 LIVE_DIR="$ROOT_DIR/os/debian-live"
 PACKAGE_LIST="$LIVE_DIR/config/package-lists/nova-desktop.list.chroot"
+GRUB_CONFIG="$LIVE_DIR/config/bootloaders/grub-pc/config.cfg"
 TEMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
@@ -12,7 +13,7 @@ fail() {
   exit 1
 }
 
-for tool in lb awk sort uniq grep cp mktemp; do
+for tool in lb awk sort uniq grep cp mktemp grub-script-check; do
   command -v "$tool" >/dev/null 2>&1 || fail "missing required command: $tool"
 done
 
@@ -23,7 +24,8 @@ for path in \
   "$LIVE_DIR/build.sh" \
   "$LIVE_DIR/config/archives/debian-backports.list.chroot" \
   "$LIVE_DIR/config/archives/debian-backports.list.binary" \
-  "$PACKAGE_LIST"; do
+  "$PACKAGE_LIST" \
+  "$GRUB_CONFIG"; do
   [[ -s "$path" ]] || fail "required file is missing or empty: $path"
 done
 
@@ -36,10 +38,21 @@ grep -Fq -- '--distribution trixie' "$CONFIG" || fail "distribution is not pinne
 grep -Fq -- '--architectures amd64' "$CONFIG" || fail "architecture is not pinned to amd64"
 grep -Fq -- '--binary-images iso-hybrid' "$CONFIG" || fail "hybrid ISO output is not enabled"
 grep -Fq -- '--bootloaders "syslinux grub-efi"' "$CONFIG" || fail "both BIOS and UEFI bootloaders must be configured"
-grep -Fq -- '--uefi-secure-boot enable' "$CONFIG" || fail "Secure Boot must fail closed rather than silently downgrade"
+grep -Fq -- '--uefi-secure-boot enable' "$CONFIG" || fail "Secure Boot must be enabled, not silently downgraded"
 grep -Fq -- '--checksums sha256' "$CONFIG" || fail "in-image SHA-256 checksums are not enabled"
 grep -Fq -- '--utc-time true' "$CONFIG" || fail "UTC image timestamps are not enabled"
-grep -Fq -- 'console=ttyS0,115200n8' "$CONFIG" || fail "serial console boot argument is required for headless boot smoke tests"
+grep -Fq -- 'console=ttyS0,115200n8' "$CONFIG" || fail "serial kernel console is required for headless boot validation"
+
+# Retain the graphical menu and mirror GRUB input/output to serial so that
+# firmware-to-kernel transitions are observable in headless boot tests.
+grep -Fq 'set timeout=8' "$GRUB_CONFIG" || fail "GRUB must auto-boot the default live entry after a visible timeout"
+grep -Fq 'serial --unit=0 --speed=115200' "$GRUB_CONFIG" || fail "GRUB serial port is not initialized"
+grep -Fq 'terminal_input --append serial' "$GRUB_CONFIG" || fail "GRUB serial input is not enabled"
+grep -Fq 'terminal_output --append serial' "$GRUB_CONFIG" || fail "GRUB serial output is not enabled"
+grep -Fq 'source /boot/grub/theme.cfg' "$GRUB_CONFIG" || fail "default NOVA GRUB theme configuration must be preserved"
+grep -Fq 'insmod gfxterm' "$GRUB_CONFIG" || fail "graphical GRUB terminal must remain available"
+grep -Fq 'terminal_output gfxterm' "$GRUB_CONFIG" || fail "graphical GRUB output must remain the primary display"
+grub-script-check "$GRUB_CONFIG" >/dev/null || fail "custom GRUB configuration has invalid syntax"
 
 for archive in "$LIVE_DIR/config/archives/debian-backports.list.chroot" "$LIVE_DIR/config/archives/debian-backports.list.binary"; do
   grep -Eq '^[[:space:]]*deb https?://deb\.debian\.org/debian trixie-backports ' "$archive" || fail "unexpected or missing Debian Trixie Backports source in $archive"
@@ -65,7 +78,7 @@ done
 duplicates="$(awk '{ sub(/#.*/, ""); for (i = 1; i <= NF; i++) print $i }' "$PACKAGE_LIST" | sort | uniq -d)"
 [[ -z "$duplicates" ]] || fail "duplicate package entries found: $duplicates"
 
-# Run live-build against a disposable copy. This checks that the real Trixie
+# Run live-build against a disposable copy. This checks that the Trixie
 # live-build parser accepts the full option set without touching repo state.
 cp -a "$LIVE_DIR/auto" "$LIVE_DIR/config" "$TEMP_DIR/"
 (
@@ -75,4 +88,4 @@ cp -a "$LIVE_DIR/auto" "$LIVE_DIR/config" "$TEMP_DIR/"
   lb config noauto --dump > resolved-live-build-config.txt
 )
 
-echo "NOVA live-build configuration is valid (Debian Trixie, amd64, BIOS+UEFI, Secure Boot, SHA-256)."
+echo "NOVA live-build configuration is valid (Debian Trixie, amd64, BIOS, UEFI, Secure Boot, graphical+serial GRUB)."

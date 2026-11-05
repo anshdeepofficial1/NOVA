@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=NOVA Desktop
+Comment=Open the NOVA workspace after graphical login
+Exec=nova-shell
+Terminal=false
+X-GNOME-Autostart-enabled=true

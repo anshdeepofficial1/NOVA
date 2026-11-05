@@ -6,8 +6,8 @@ ISO_DEFAULT="$ROOT_DIR/os/debian-live/live-image-amd64.hybrid.iso"
 ISO="$ISO_DEFAULT"
 FIRMWARE="both"
 TIMEOUT_SECONDS="600"
-MEMORY_MIB="4096"
-CPUS="2"
+MEMORY_MIB="6144"
+CPUS="4"
 LOG_DIR="$ROOT_DIR/os/debian-live/validation/qemu"
 
 usage() {
@@ -83,7 +83,7 @@ run_firmware_test() {
   local qemu_log="$LOG_DIR/$mode.qemu.log"
   local -a args=(
     -machine q35
-    -accel tcg
+    -accel tcg,thread=multi
     -cpu max
     -m "$MEMORY_MIB"
     -smp "$CPUS"
@@ -168,17 +168,22 @@ run_firmware_test() {
   fail "$mode boot exceeded $TIMEOUT_SECONDS seconds"
 }
 
+FAILURES=0
 case "$FIRMWARE" in
   both)
-    run_firmware_test uefi
-    run_firmware_test bios
+    run_firmware_test uefi || FAILURES=$((FAILURES + 1))
+    run_firmware_test bios || FAILURES=$((FAILURES + 1))
     ;;
   uefi)
-    run_firmware_test uefi
+    run_firmware_test uefi || FAILURES=$((FAILURES + 1))
     ;;
   bios)
-    run_firmware_test bios
+    run_firmware_test bios || FAILURES=$((FAILURES + 1))
     ;;
 esac
+
+if (( FAILURES > 0 )); then
+  fail "$FAILURES firmware boot smoke test(s) failed"
+fi
 
 echo "NOVA ISO QEMU firmware smoke tests passed."

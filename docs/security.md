@@ -12,6 +12,12 @@ It does **not** read arbitrary package files, execute a user-supplied path, invo
 
 The live image runs the daemon as a per-user systemd service with basic hardening directives. The Tauri process is also an unprivileged desktop client. The daemon's CORS allow-list limits browser origins but **CORS is not authentication**; loopback services can still be called by other local processes. This is acceptable only while the API is observational. Do not add privileged operations to this API without a separate authenticated IPC and permission design.
 
+## Runtime authorization contract
+
+The `nova-runtime` crate adds a fail-closed policy gate. It binds approvals to the application ID and SHA-256 artifact digest, checks expiry, verifies signatures through an injected `ApprovalVerifier`, ensures requested permissions are both approved and supported by the selected ready runtime, and bounds memory, CPU, storage, process count and execution time. It emits a sandbox plan with no-new-privileges, read-only host root, isolated app data and default-deny permissions.
+
+There is no production signing service or cryptographic verifier in this repository yet. Unit tests use a test-only verifier and do not establish a production trust boundary. Do not register real launch adapters until the signed approval service, key custody, authenticated IPC, sandbox enforcement and integration tests are implemented.
+
 ## Threats
 
 - Malicious, malformed or deceptive package files and filenames.

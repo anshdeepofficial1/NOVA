@@ -42,7 +42,7 @@ grep -Fq -- '--utc-time true' "$CONFIG" || fail "UTC image timestamps are not en
 grep -Fq -- 'console=ttyS0,115200n8' "$CONFIG" || fail "serial console boot argument is required for headless boot smoke tests"
 
 for archive in "$LIVE_DIR/config/archives/debian-backports.list.chroot" "$LIVE_DIR/config/archives/debian-backports.list.binary"; do
-  grep -Eq '^[[:space:]]*deb https://deb\.debian\.org/debian trixie-backports ' "$archive" || fail "unexpected or missing Debian Trixie Backports source in $archive"
+  grep -Eq '^[[:space:]]*deb https?://deb\.debian\.org/debian trixie-backports ' "$archive" || fail "unexpected or missing Debian Trixie Backports source in $archive"
 done
 
 grep -Fxq 'waydroid/trixie-backports' "$PACKAGE_LIST" || fail "Waydroid must be selected explicitly from Trixie Backports"

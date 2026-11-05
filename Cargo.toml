@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["crates/nova-core", "crates/nova-daemon"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+version = "0.1.0"
+rust-version = "1.78"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+axum = "0.7"
+tower-http = { version = "0.5", features = ["cors", "trace"] }

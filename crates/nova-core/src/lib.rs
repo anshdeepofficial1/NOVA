@@ -86,7 +86,8 @@ pub fn inspect_input(input: &str) -> Result<CompatibilityPlan, PlanError> {
             runtime: RuntimeKind::Browser,
             support: SupportLevel::Planned,
             summary: "A web URL can be opened in NOVA's browser workspace.".into(),
-            next_step: "Browser/PWA integration is planned; no remote code is executed by this API.".into(),
+            next_step:
+                "Browser/PWA integration is planned; no remote code is executed by this API.".into(),
             requires_explicit_consent: false,
         });
     }
@@ -96,11 +97,13 @@ pub fn inspect_input(input: &str) -> Result<CompatibilityPlan, PlanError> {
     }
 
     let path = Path::new(normalized);
-    let input_name = path.file_name()
+    let input_name = path
+        .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or(normalized)
         .to_owned();
-    let extension = path.extension()
+    let extension = path
+        .extension()
         .and_then(|extension| extension.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
@@ -203,14 +206,23 @@ mod tests {
 
     #[test]
     fn recognizes_only_http_and_https_urls() {
-        assert_eq!(inspect_input("https://example.com").unwrap().package_kind, PackageKind::WebApp);
-        assert_eq!(inspect_input("ftp://example.com"), Err(PlanError::UnsupportedUrlScheme));
+        assert_eq!(
+            inspect_input("https://example.com").unwrap().package_kind,
+            PackageKind::WebApp
+        );
+        assert_eq!(
+            inspect_input("ftp://example.com"),
+            Err(PlanError::UnsupportedUrlScheme)
+        );
     }
 
     #[test]
     fn rejects_empty_unknown_and_oversized_inputs() {
         assert_eq!(inspect_input("  "), Err(PlanError::EmptyInput));
-        assert_eq!(inspect_input("random.bin"), Err(PlanError::UnsupportedFileType));
+        assert_eq!(
+            inspect_input("random.bin"),
+            Err(PlanError::UnsupportedFileType)
+        );
         let oversized = "x".repeat(MAX_INSPECTION_INPUT_BYTES + 1);
         assert_eq!(inspect_input(&oversized), Err(PlanError::InputTooLong));
     }

@@ -39,7 +39,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           df -h /
 
-      - name: Install native desktop, live-build and QEMU dependencies
+      - name: Install native desktop and QEMU dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -47,9 +47,6 @@ jobs:
             build-essential curl wget file \
             libxdo-dev libssl-dev \
             libayatana-appindicator3-dev librsvg2-dev \
-            live-build debootstrap squashfs-tools xorriso \
-            grub-pc-bin grub-efi-amd64-bin mtools dosfstools \
-            isolinux syslinux-common \
             qemu-system-x86 qemu-utils ovmf
 
       - name: Verify Rust source
@@ -57,9 +54,6 @@ jobs:
           cargo fmt --all -- --check
           cargo test --workspace
           cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Validate Debian Live configuration with Trixie's live-build parser
-        run: bash scripts/validate-live-build-config.sh
 
       - name: Install JavaScript dependencies
         run: npm install
@@ -83,12 +77,25 @@ jobs:
           test -s os/debian-live/config/includes.chroot/usr/local/bin/nova-daemon
           test -n "$(find os/debian-live/config/packages.chroot -maxdepth 1 -name '*.deb' -print -quit)"
 
-      - name: Build NOVA ISO with a source-derived timestamp
-        run: sudo bash os/debian-live/build.sh
+      - name: Build NOVA ISO using Debian Trixie live-build
+        run: |
+          docker run --rm --privileged \
+            --volume "$GITHUB_WORKSPACE:/workspace" \
+            --workdir /workspace \
+            debian:trixie \
+            bash -euc '
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                bash ca-certificates file git \
+                live-build debootstrap squashfs-tools xorriso \
+                grub-pc-bin grub-efi-amd64-bin mtools dosfstools \
+                isolinux syslinux-common debian-archive-keyring
+              bash os/debian-live/build.sh
+            '
 
       - name: Boot-test both BIOS and UEFI paths in disposable QEMU guests
         run: |
-          bash scripts/smoke-iso-qemu.sh \
+          sudo bash scripts/smoke-iso-qemu.sh \
             --iso os/debian-live/live-image-amd64.hybrid.iso \
             --firmware both \
             --timeout-seconds 600 \

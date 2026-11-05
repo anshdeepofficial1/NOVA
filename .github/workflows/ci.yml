@@ -19,10 +19,6 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Install Debian Live configuration validator
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y live-build
       - name: Check shell script syntax
         run: |
           bash -n scripts/check-host.sh
@@ -35,8 +31,17 @@ jobs:
           bash -n os/debian-live/auto/build
           sh -n os/debian-live/auto/config
           sh -n os/debian-live/auto/clean
-      - name: Validate Debian Live build configuration
-        run: bash scripts/validate-live-build-config.sh
+      - name: Validate Debian Live configuration using Debian Trixie live-build
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace:ro" \
+            --workdir /tmp \
+            debian:trixie \
+            bash -euc '
+              apt-get update
+              apt-get install -y --no-install-recommends bash live-build
+              bash /workspace/scripts/validate-live-build-config.sh
+            '
       - run: cargo fmt --all -- --check
       - run: cargo test --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings

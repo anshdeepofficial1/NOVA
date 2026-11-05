@@ -25,7 +25,8 @@ A website cannot directly execute arbitrary APK, EXE or DMG files on the user's 
 ├── apps/shell/                  # React UI + Tauri native desktop app
 ├── crates/
 │   ├── nova-core/              # Pure compatibility planning and package classification
-│   └── nova-daemon/             # Rust loopback API and host capability detection
+│   ├── nova-daemon/             # Rust loopback API and host capability detection
+│   └── nova-runtime/            # Fail-closed runtime permission and sandbox policy
 ├── os/debian-live/              # Debian Trixie amd64 live ISO configuration
 ├── docs/                        # Architecture, compatibility, security and development
 ├── scripts/                     # Host development checks
@@ -46,7 +47,8 @@ A website cannot directly execute arbitrary APK, EXE or DMG files on the user's 
 - Debian Trixie live-build recipe with KDE, live installer, Waydroid backports, Wine, QEMU/KVM, Flatpak and NOVA components.
 - Per-user systemd service for the local NOVA daemon in the image, plus KDE/XDG autostart for the NOVA Desktop.
 - Debian Backports repository configured in both the live-build chroot and installed system for maintained Waydroid updates.
-- Automated Rust, frontend and native desktop CI; manual ISO build workflow.
+- Automated Rust unit, Clippy, daemon HTTP smoke, frontend and native Debian package CI; manual ISO build workflow.
+- Dependabot updates for GitHub Actions, npm and Cargo dependencies.
 
 ## Not implemented yet
 
@@ -120,4 +122,4 @@ npm run desktop:build
 - Use signed upstream packages, dependency pinning, SBOMs, automated tests, recovery and vulnerability response.
 - Build on upstream Linux/runtime projects and preserve their licenses and notices.
 
-See [architecture](docs/architecture.md), [compatibility policy](docs/compatibility.md), [runtime-adapter policy](docs/runtime-adapters.md), [security model](docs/security.md), [development guide](docs/development.md) and the [ISO builder](os/debian-live/README.md).
+See [architecture](docs/architecture.md), [compatibility policy](docs/compatibility.md), [runtime-adapter policy](docs/runtime-adapters.md), [security model](docs/security.md), [development guide](docs/development.md), [hardware validation matrix](docs/hardware-validation.md), [release gates](docs/release-gates.md), [security reporting](SECURITY.md) and the [ISO builder](os/debian-live/README.md).

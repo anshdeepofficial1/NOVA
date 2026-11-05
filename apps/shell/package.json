@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "desktop:dev": "bash ../../scripts/stage-sidecar.sh && tauri dev",
-    "desktop:build": "bash ../../scripts/stage-sidecar.sh && tauri build"
+    "desktop:build": "bash ../../scripts/stage-sidecar.sh && tauri build",
+    "icons": "tauri icon src-tauri/brand/nova.svg --output src-tauri/icons"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

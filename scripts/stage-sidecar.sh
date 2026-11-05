@@ -36,6 +36,9 @@ case "$TARGET_TRIPLE" in
     ;;
 esac
 
+echo "Generating the NOVA application icon set..."
+npm run icons --workspace @nova/shell
+
 echo "Building NOVA host daemon for $TARGET_TRIPLE..."
 cargo build --release --target "$TARGET_TRIPLE" -p nova-daemon
 

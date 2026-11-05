@@ -57,7 +57,7 @@ pub struct CompatibilityPlan {
 pub enum PlanError {
     #[error("A file path or web URL is required.")]
     EmptyInput,
-    #[error("Input is too long (maximum {MAX_INSPECTION_INPUT_BYTES} bytes).")]
+    #[error("Input is too long (maximum 4096 bytes).")]
     InputTooLong,
     #[error("This file type is not recognized by NOVA yet.")]
     UnsupportedFileType,

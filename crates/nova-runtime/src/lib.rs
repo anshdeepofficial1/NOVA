@@ -436,7 +436,7 @@ mod tests {
         );
 
         let mut bad_limits = request();
-        bad_limits.memory_mib = 0;
+        bad_limits.limits.memory_mib = 0;
         assert_eq!(
             authorize_launch(
                 &bad_limits,

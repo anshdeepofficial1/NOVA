@@ -2,7 +2,7 @@
 
 NOVA is a hybrid operating-system project: a bootable Linux desktop for physical PCs, a native desktop workspace, application compatibility runtimes, and a separately deployed cloud-workspace service.
 
-> **Status: experimental foundation.** The repository now contains a Debian live-image recipe, a native Tauri desktop app, a Rust host API and runtime-prerequisite discovery. The ISO build workflow has been added but an ISO has not yet passed a full build-and-VM acceptance cycle. APK/EXE/DMG execution, cloud workspaces and a production NOVA compositor are not complete.
+> **Status: experimental foundation.** The repository contains a Debian live-image recipe, a native Tauri desktop app, a Rust host API and runtime-prerequisite discovery. The ISO build pipeline now validates the live-build configuration, checks the ISO boot catalog and live filesystem, and runs headless BIOS/UEFI QEMU boot smoke tests. A successful workflow run and physical-device acceptance are still required before claiming the image is validated. APK/EXE/DMG execution, cloud workspaces and a production NOVA compositor are not complete.
 
 ## Product architecture
 
@@ -20,7 +20,7 @@ A website cannot directly execute arbitrary APK, EXE or DMG files on the user's 
 
 ## Repository structure
 
-~~~text
+```text
 .
 ├── apps/shell/                  # React UI + Tauri native desktop app
 ├── crates/
@@ -29,11 +29,11 @@ A website cannot directly execute arbitrary APK, EXE or DMG files on the user's 
 │   └── nova-runtime/            # Fail-closed runtime permission and sandbox policy
 ├── os/debian-live/              # Debian Trixie amd64 live ISO configuration
 ├── docs/                        # Architecture, compatibility, security and development
-├── scripts/                     # Host development checks
+├── scripts/                     # Host checks, ISO validation and QEMU smoke tests
 └── .github/workflows/
-    ├── ci.yml                   # Rust, frontend and native desktop package CI
-    └── build-iso.yml             # Manual bootable ISO build
-~~~
+    ├── ci.yml                   # Rust, live-build config, frontend and native desktop CI
+    └── build-iso.yml             # BIOS/UEFI ISO build and boot smoke tests
+```
 
 ## Implemented in this repository
 
@@ -45,14 +45,17 @@ A website cannot directly execute arbitrary APK, EXE or DMG files on the user's 
 - Native Tauri desktop application with a bundled Rust daemon sidecar; the webview cannot spawn arbitrary commands.
 - Tauri-generated desktop icon assets from the committed NOVA SVG source.
 - Debian Trixie live-build recipe with KDE, live installer, Waydroid backports, Wine, QEMU/KVM, Flatpak and NOVA components.
+- Explicit Syslinux/GRUB EFI bootloader selection, strict Debian signed shim/GRUB Secure Boot mode and in-image SHA-256 checksums.
+- Clean/reuse-cache image build orchestration with source-derived timestamps, build logs and an ISO build manifest.
+- Live-build parser validation, ISO 9660/El Torito/kernel/initrd/SquashFS structural validation and headless QEMU smoke-test code for BIOS and UEFI.
 - Per-user systemd service for the local NOVA daemon in the image, plus KDE/XDG autostart for the NOVA Desktop.
 - Debian Backports repository configured in both the live-build chroot and installed system for maintained Waydroid updates.
-- Automated Rust unit, Clippy, daemon HTTP smoke, frontend and native Debian package CI; manual ISO build workflow.
+- Automated Rust unit, Clippy, daemon HTTP smoke, frontend and native Debian package CI; dedicated image workflow.
 - Dependabot updates for GitHub Actions, npm and Cargo dependencies.
 
 ## Not implemented yet
 
-- A release-quality ISO validated on physical PCs and a VM test matrix.
+- A release-quality ISO validated on physical PCs and a completed successful BIOS/UEFI workflow run.
 - A custom NOVA Wayland compositor, window manager, login manager or full desktop session. The first image uses KDE Plasma.
 - Production install/launch adapters for APK, EXE/MSI, DEB, AppImage or Flatpak.
 - Production cryptographic approval signer/verifier and secure key storage. The policy crate currently provides the fail-closed contract and a test verifier only.
@@ -69,47 +72,48 @@ Requirements: Rust 1.90+, Node.js 20+, npm and Git. The native desktop build sta
 
 Terminal 1 — start the host service:
 
-~~~bash
+```bash
 cargo run -p nova-daemon
-~~~
+```
 
 Terminal 2 — start the browser development shell:
 
-~~~bash
+```bash
 npm install
 npm run dev
-~~~
+```
 
 To run the native desktop window instead:
 
-~~~bash
+```bash
 npm run desktop:dev
-~~~
+```
 
 Build the native Linux package:
 
-~~~bash
+```bash
 npm run desktop:build
-~~~
+```
 
 The native Tauri app waits briefly for the NOVA user service and reuses it when healthy; otherwise it starts its bundled daemon sidecar. The sidecar is terminated with the desktop app. The live image autostarts the NOVA Desktop at KDE/XDG graphical login. The browser-only Vite preview still requires `cargo run -p nova-daemon` in another terminal. The daemon is deliberately read-only today: capability lookup and package planning only. It does not install software, call a shell, start a VM or execute a selected file.
 
 ## Build the bootable image
 
-See [os/debian-live/README.md](os/debian-live/README.md). A manual GitHub build is available under **Actions → Build NOVA ISO → Run workflow**. It uploads the ISO and SHA-256 checksum when a build succeeds. After downloading the artifact, use `bash scripts/test-iso-qemu.sh --firmware uefi` to boot it in a disposable VM with a separate virtual disk.
+See [os/debian-live/README.md](os/debian-live/README.md). A manual GitHub build is available under **Actions → Build NOVA ISO → Run workflow**; pushes to `main` that modify the image recipe or its test scripts also trigger the full image pipeline. The workflow uploads the ISO, checksum, build manifest and validation evidence when all build and BIOS/UEFI smoke-test steps succeed.
 
 Do not install an experimental image on a machine containing important data. Test the live session and installer in a disposable VM first.
 
 ## Validate changes
 
-~~~bash
+```bash
 cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 npm run typecheck
 npm run build
 npm run desktop:build
-~~~
+bash scripts/validate-live-build-config.sh
+```
 
 ## Engineering and safety principles
 

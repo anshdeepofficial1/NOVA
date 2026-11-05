@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   rust:
-    name: Rust checks
+    name: Rust and live-build configuration checks
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -19,13 +19,24 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Install Debian Live configuration validator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y live-build
       - name: Check shell script syntax
         run: |
           bash -n scripts/check-host.sh
           bash -n scripts/stage-sidecar.sh
           bash -n scripts/test-iso-qemu.sh
+          bash -n scripts/validate-live-build-config.sh
+          bash -n scripts/validate-iso.sh
+          bash -n scripts/smoke-iso-qemu.sh
           bash -n os/debian-live/build.sh
+          bash -n os/debian-live/auto/build
           sh -n os/debian-live/auto/config
+          sh -n os/debian-live/auto/clean
+      - name: Validate Debian Live build configuration
+        run: bash scripts/validate-live-build-config.sh
       - run: cargo fmt --all -- --check
       - run: cargo test --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings

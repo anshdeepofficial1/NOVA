@@ -37,8 +37,8 @@ plasma-discover-backend-flatpak
 fuse3
 bubblewrap
 
-# Android container (Trixie backports is configured separately).
-waydroid
+# Android container is intentionally selected from Debian Trixie Backports.
+waydroid/trixie-backports
 
 # Windows compatibility and optional full-OS virtualization.
 wine

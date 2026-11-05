@@ -12,3 +12,10 @@
 
 # Disposable QEMU validation disk
 .nova-qemu-test.qcow2
+
+# Generated NOVA operating-system image and builder reports
+os/debian-live/live-image-amd64.hybrid.iso
+os/debian-live/live-image-amd64.hybrid.iso.sha256
+os/debian-live/live-image-amd64.hybrid.iso.buildinfo
+os/debian-live/nova-live-build-config.txt
+os/debian-live/validation/

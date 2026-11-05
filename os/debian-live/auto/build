@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Preserve the exact live-build output in the image-builder directory while
+# still streaming it to the terminal/Actions log. pipefail keeps build errors.
+lb build noauto "$@" 2>&1 | tee build.log

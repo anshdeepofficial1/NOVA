@@ -12,11 +12,16 @@ This document prevents a roadmap item, a package in an image, or a successful bu
 - Dependency and build provenance are recorded.
 
 ### M1 — Bootable development image
-- Manual amd64 ISO build completes and produces SHA-256.
-- ISO boot records are present.
-- Live session boots in UEFI and legacy BIOS test VMs (or legacy is explicitly unsupported).
-- No disk is modified until the user enters the installer and confirms an explicit target.
-- ISO build logs and reproducible test evidence are archived.
+- The version-controlled Debian Live configuration passes the Trixie live-build parser validation.
+- The clean build script resolves configuration from source-controlled files and captures a complete build log.
+- Manual or push-triggered amd64 ISO build completes and produces a separate SHA-256 checksum and build manifest.
+- ISO structure validation finds the ISO 9660 filesystem, BIOS and UEFI El Torito entries, live kernel, initrd and SquashFS root filesystem.
+- A disposable QEMU guest reaches a systemd serial login prompt in both legacy BIOS and UEFI modes.
+- Secure Boot mode is required during image creation; a missing signed shim/GRUB package must fail the build rather than silently downgrade.
+- No disk is modified by the boot smoke test; no virtual disk is attached.
+- Build logs, image manifest, checksum and validation reports are archived.
+
+M1 is a build/boot milestone only. Graphical desktop acceptance, Debian Installer installation, reboot-after-install, physical-device coverage, disk encryption, snapshots and recovery are later gates.
 
 ### M2 — Installable PC system
 - Debian Installer live mode completes in a disposable VM.
@@ -66,9 +71,12 @@ Every pull request should pass:
 - Rust dependency audit and license/SBOM checks (to be added before a public release).
 - Frontend type-check and production build.
 - Native Debian package build and package-content verification.
+- Debian Live config validation against Trixie's live-build parser.
 - Local API smoke tests including malformed input, unsupported types and request-size limits.
 - Secret scanning and static analysis.
 - Relevant integration tests in disposable environments.
+
+The heavier ISO build and BIOS/UEFI QEMU smoke tests run in the dedicated image workflow when its recipe changes or when manually requested.
 
 ## Operational quality
 

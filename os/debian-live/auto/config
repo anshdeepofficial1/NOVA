@@ -1,14 +1,16 @@
 #!/bin/sh
 set -eu
 
-# Debian Live's auto/config is re-entered through "lb config noauto" to
-# prevent recursion. Extra arguments at the end intentionally allow CI and
-# local maintainers to override defaults for controlled experiments.
+# Debian Live re-enters auto/config through "lb config noauto". Keep noauto
+# first so the wrapper cannot recurse. The explicit bootloader pair creates
+# legacy BIOS (Syslinux/ISOLINUX) and UEFI (GRUB) El Torito entries.
 lb config noauto \
+  --ignore-system-defaults \
   --mode debian \
   --architectures amd64 \
   --distribution trixie \
   --binary-images iso-hybrid \
+  --bootloaders "syslinux grub-efi" \
   --archive-areas "main contrib non-free non-free-firmware" \
   --debian-installer live \
   --debian-installer-gui true \
@@ -16,10 +18,15 @@ lb config noauto \
   --firmware-binary true \
   --firmware-chroot true \
   --apt-recommends true \
+  --apt-secure true \
   --updates true \
-  --uefi-secure-boot auto \
+  --uefi-secure-boot enable \
+  --checksums sha256 \
+  --utc-time true \
   --iso-application "NOVA OS" \
+  --iso-preparer "NOVA OS build system" \
   --iso-publisher "NOVA Project" \
   --iso-volume "NOVA_OS_0_1" \
-  --bootappend-live "boot=live components hostname=nova username=nova locales=en_US.UTF-8 keyboard-layouts=us" \
+  --image-name "live-image" \
+  --bootappend-live "boot=live components hostname=nova username=nova locales=en_US.UTF-8 keyboard-layouts=us console=tty0 console=ttyS0,115200n8" \
   "$@"

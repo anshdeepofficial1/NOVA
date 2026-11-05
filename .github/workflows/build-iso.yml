@@ -1,6 +1,14 @@
 name: Build NOVA ISO
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "os/debian-live/**"
+      - "scripts/validate-live-build-config.sh"
+      - "scripts/validate-iso.sh"
+      - "scripts/smoke-iso-qemu.sh"
+      - ".github/workflows/build-iso.yml"
   workflow_dispatch:
 
 permissions:
@@ -12,9 +20,9 @@ concurrency:
 
 jobs:
   build-image:
-    name: Build NOVA live installer (amd64)
+    name: Build and boot-test NOVA live installer (amd64)
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v7
 
@@ -26,7 +34,12 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Install native desktop and ISO builder dependencies
+      - name: Reclaim runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h /
+
+      - name: Install native desktop, live-build and QEMU dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -36,13 +49,17 @@ jobs:
             libayatana-appindicator3-dev librsvg2-dev \
             live-build debootstrap squashfs-tools xorriso \
             grub-pc-bin grub-efi-amd64-bin mtools dosfstools \
-            isolinux syslinux-common
+            isolinux syslinux-common \
+            qemu-system-x86 qemu-utils ovmf
 
       - name: Verify Rust source
         run: |
           cargo fmt --all -- --check
           cargo test --workspace
           cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Validate Debian Live configuration with Trixie's live-build parser
+        run: bash scripts/validate-live-build-config.sh
 
       - name: Install JavaScript dependencies
         run: npm install
@@ -66,22 +83,28 @@ jobs:
           test -s os/debian-live/config/includes.chroot/usr/local/bin/nova-daemon
           test -n "$(find os/debian-live/config/packages.chroot -maxdepth 1 -name '*.deb' -print -quit)"
 
-      - name: Build bootable NOVA ISO
+      - name: Build NOVA ISO with a source-derived timestamp
         run: sudo bash os/debian-live/build.sh
 
-      - name: Verify ISO structure and generate checksum
+      - name: Boot-test both BIOS and UEFI paths in disposable QEMU guests
         run: |
-          ISO="os/debian-live/live-image-amd64.hybrid.iso"
-          test -s "$ISO"
-          file "$ISO"
-          xorriso -indev "$ISO" -report_el_torito as_mkisofs
-          sha256sum "$ISO" | tee "$ISO.sha256"
+          bash scripts/smoke-iso-qemu.sh \
+            --iso os/debian-live/live-image-amd64.hybrid.iso \
+            --firmware both \
+            --timeout-seconds 600 \
+            --log-dir os/debian-live/validation/qemu
 
-      - uses: actions/upload-artifact@v7
+      - name: Upload ISO, checksum, build manifest and test evidence
+        if: always()
+        uses: actions/upload-artifact@v7
         with:
           name: NOVA-OS-amd64-experimental
           path: |
             os/debian-live/live-image-amd64.hybrid.iso
             os/debian-live/live-image-amd64.hybrid.iso.sha256
-          if-no-files-found: error
+            os/debian-live/live-image-amd64.hybrid.iso.buildinfo
+            os/debian-live/build.log
+            os/debian-live/nova-live-build-config.txt
+            os/debian-live/validation/
+          if-no-files-found: warn
           retention-days: 14

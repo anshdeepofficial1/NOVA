@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/nova-core", "crates/nova-daemon"]
+exclude = ["apps/shell/src-tauri"]
 
 [workspace.package]
 edition = "2021"

@@ -139,7 +139,9 @@ export default function App() {
             <div className="system-status"><span className={"large-status-dot " + (connected ? "active" : "")} /><div><b>{connected ? "Local service online" : "Local service offline"}</b><small>{connected ? "NOVA API responding" : "Start nova-daemon to connect"}</small></div></div>
             <div className="data-row"><span>Host</span><b>{system ? system.host_os : "Not detected"}</b></div>
             <div className="data-row"><span>Architecture</span><b>{system ? system.architecture : "—"}</b></div>
-            <div className="data-row"><span>API version</span><b>{system ? system.api_version : "—"}</b></div>
+            <div className="data-row"><span>Distribution</span><b>{system ? system.distribution : "—"}</b></div>
+            <div className="data-row"><span>Kernel</span><b>{system ? system.kernel_release : "—"}</b></div>
+            <div className="data-row"><span>Session</span><b>{system ? system.session_type : "—"}</b></div>
             <button className="text-button" onClick={() => void refresh()}>Refresh status ↻</button>
           </article>
 
@@ -148,7 +150,7 @@ export default function App() {
             {system?.runtimes.map((runtime) => (
               <div className="runtime-row" key={runtime.id}>
                 <div><b>{runtime.id.replaceAll("-", " ")}</b><small>{runtime.note}</small></div>
-                <span className={"runtime-state " + (runtime.state === "unavailable" ? "muted" : "")}>{runtime.state.replaceAll("_", " ")}</span>
+                <span className={"runtime-state " + (["detected", "initialized", "kvm_available"].includes(runtime.state) ? "ready" : runtime.state.includes("unavailable") ? "muted" : "")}>{runtime.state.replaceAll("_", " ")}</span>
               </div>
             )) ?? <p className="empty-state">Connect the local service to inspect runtime readiness.</p>}
           </article>

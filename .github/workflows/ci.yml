@@ -19,6 +19,13 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Check shell script syntax
+        run: |
+          bash -n scripts/check-host.sh
+          bash -n scripts/stage-sidecar.sh
+          bash -n scripts/test-iso-qemu.sh
+          bash -n os/debian-live/build.sh
+          sh -n os/debian-live/auto/config
       - run: cargo fmt --all -- --check
       - run: cargo test --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings

@@ -1,0 +1,13 @@
+NOVA OS development image
+
+This image is an experimental Debian Trixie amd64 live system with KDE Plasma.
+It is not a stable release and must be tested in a disposable virtual machine
+before installation on real hardware.
+
+The Debian Installer live mode is available from the boot menu. Disk operations
+are user initiated; back up all important data before selecting a target disk.
+
+NOVA does not promise universal APK, EXE, MSI, DMG or PKG compatibility.
+Read the NOVA compatibility and security documentation before enabling runtime
+adapters. The local daemon only reports host capability state and inspects
+filename/URL hints; it never executes uploaded or downloaded files.

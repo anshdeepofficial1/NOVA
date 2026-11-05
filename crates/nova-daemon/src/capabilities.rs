@@ -112,8 +112,7 @@ fn kernel_has_binder(release: &str) -> bool {
     fs::read_to_string(config_path)
         .map(|contents| {
             contents.lines().any(|line| {
-                line == "CONFIG_ANDROID_BINDER_IPC=y"
-                    || line == "CONFIG_ANDROID_BINDER_IPC=m"
+                line == "CONFIG_ANDROID_BINDER_IPC=y" || line == "CONFIG_ANDROID_BINDER_IPC=m"
             })
         })
         .unwrap_or(false)
@@ -158,7 +157,11 @@ pub fn inspect_host() -> HostReport {
         "missing"
     };
 
-    let waydroid_state = match (&waydroid, has_wayland_session(), kernel_has_binder(&release)) {
+    let waydroid_state = match (
+        &waydroid,
+        has_wayland_session(),
+        kernel_has_binder(&release),
+    ) {
         (None, _, _) => "not_installed",
         (Some(_), false, _) => "wayland_session_required",
         (Some(_), true, false) => "binder_kernel_support_missing",

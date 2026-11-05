@@ -44,7 +44,8 @@ A website cannot directly execute arbitrary APK, EXE or DMG files on the user's 
 - Native Tauri desktop application with a bundled Rust daemon sidecar; the webview cannot spawn arbitrary commands.
 - Tauri-generated desktop icon assets from the committed NOVA SVG source.
 - Debian Trixie live-build recipe with KDE, live installer, Waydroid backports, Wine, QEMU/KVM, Flatpak and NOVA components.
-- Per-user systemd service for the local NOVA daemon in the image.
+- Per-user systemd service for the local NOVA daemon in the image, plus KDE/XDG autostart for the NOVA Desktop.
+- Debian Backports repository configured in both the live-build chroot and installed system for maintained Waydroid updates.
 - Automated Rust, frontend and native desktop CI; manual ISO build workflow.
 
 ## Not implemented yet
@@ -89,7 +90,7 @@ Build the native Linux package:
 npm run desktop:build
 ~~~
 
-The native Tauri app checks for the NOVA user service first and otherwise starts its bundled daemon sidecar. The sidecar is terminated with the desktop app. The browser-only Vite preview still requires `cargo run -p nova-daemon` in another terminal. The daemon is deliberately read-only today: capability lookup and package planning only. It does not install software, call a shell, start a VM or execute a selected file.
+The native Tauri app waits briefly for the NOVA user service and reuses it when healthy; otherwise it starts its bundled daemon sidecar. The sidecar is terminated with the desktop app. The live image autostarts the NOVA Desktop at KDE/XDG graphical login. The browser-only Vite preview still requires `cargo run -p nova-daemon` in another terminal. The daemon is deliberately read-only today: capability lookup and package planning only. It does not install software, call a shell, start a VM or execute a selected file.
 
 ## Build the bootable image
 

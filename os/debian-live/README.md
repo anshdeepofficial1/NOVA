@@ -14,6 +14,8 @@ It is an intentionally conventional Linux base. NOVA does not fork a kernel or r
 - Debian Installer live mode, which installs the live filesystem to disk.
 - NOVA Desktop native Tauri .deb package and the NOVA host API binary.
 - A hardened per-user systemd unit that starts the read-only NOVA host service at graphical login.
+- A KDE/XDG autostart entry that opens NOVA Desktop after login; it reuses the user service when healthy and only starts its packaged sidecar as a fallback.
+- Debian Trixie Backports configured for both image construction and the installed system, so Waydroid can receive updates through the configured repository.
 
 Runtime packages being present does not mean an app is compatible. Waydroid depends on a Wayland session and kernel Binder support; Wine compatibility is app/version specific; hardware-accelerated VMs require accessible KVM. NOVA reports these conditions and never silently executes a downloaded installer.
 
@@ -32,7 +34,7 @@ sudo apt install -y \
   grub-pc-bin grub-efi-amd64-bin mtools dosfstools isolinux syslinux-common
 ~~~
 
-Build the native NOVA shell package and daemon:
+Build the native NOVA shell package and daemon. The desktop build generates the Tauri icon set and stages the daemon sidecar automatically:
 
 ~~~bash
 npm install

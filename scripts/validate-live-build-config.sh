@@ -97,4 +97,4 @@ cp -a "$LIVE_DIR/auto" "$LIVE_DIR/config" "$TEMP_DIR/"
   lb config noauto --dump > resolved-live-build-config.txt
 )
 
-echo "NOVA live-build configuration is valid (Debian Trixie, amd64, BIOS, UEFI, Secure Boot, graphical+serial GRUB)."
+echo "NOVA live-build configuration is valid (Debian Trixie, amd64, BIOS auto-boot, UEFI, Secure Boot, graphical+serial GRUB)."

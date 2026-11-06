@@ -82,6 +82,7 @@ jobs:
           npm run build
           npm run desktop:build
           test -n "$(find apps/shell/src-tauri/target/release/bundle/deb -maxdepth 1 -name '*.deb' -print -quit)"
+          cargo test --manifest-path apps/shell/src-tauri/Cargo.toml
 
       - name: Build NOVA host daemon
         run: cargo build --release -p nova-daemon

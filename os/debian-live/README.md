@@ -12,6 +12,7 @@ The configuration explicitly selects:
 
 - Debian Trixie amd64 and the `iso-hybrid` image format.
 - Syslinux/ISOLINUX for legacy BIOS and GRUB EFI for UEFI.
+- A visible BIOS menu that automatically selects the default live entry after five seconds while retaining manual menu choices.
 - Debian's signed shim/GRUB packages through strict Secure Boot mode. The image build fails instead of silently downgrading if the signed packages are unavailable.
 - SHA-256 checksums in the live medium, a separate downloadable SHA-256 file, UTC timestamps and a build manifest with source commit/build metadata.
 - A serial console boot argument so headless BIOS and UEFI VM smoke tests can wait for a real systemd login prompt.

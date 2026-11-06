@@ -70,7 +70,7 @@ grep -Eiq 'efi\.img' "$REPORT_DIR/el-torito.txt" || fail "UEFI El Torito boot im
 
 # Validate the actual EFI FAT image instead of trusting only the catalog flag.
 EFI_IMAGE="$REPORT_DIR/efi.img"
-xorriso -indev "$ISO" -extract /boot/grub/efi.img "$EFI_IMAGE" > "$REPORT_DIR/efi-extract.txt" 2>&1 || fail "could not extract /boot/grub/efi.img from the ISO"
+xorriso -osirrox on -indev "$ISO" -extract /boot/grub/efi.img "$EFI_IMAGE" > "$REPORT_DIR/efi-extract.txt" 2>&1 || fail "could not extract /boot/grub/efi.img from the ISO"
 [[ -s "$EFI_IMAGE" ]] || fail "extracted UEFI boot image is empty"
 mdir -i "$EFI_IMAGE" ::/EFI/BOOT > "$REPORT_DIR/efi-boot-directory.txt" 2>&1 || fail "UEFI boot image has no EFI/BOOT directory"
 

@@ -117,5 +117,8 @@ jobs:
           dpkg-deb --contents "$package" | tee "$RUNNER_TEMP/nova-deb-contents.txt"
           grep -q "nova-shell" "$RUNNER_TEMP/nova-deb-contents.txt"
           grep -q "nova-daemon" "$RUNNER_TEMP/nova-deb-contents.txt"
-      - name: Test native desktop daemon startup coordination
-        run: cargo test --manifest-path apps/shell/src-tauri/Cargo.toml
+      - name: Verify native desktop Rust quality and daemon startup regressions
+        run: |
+          cargo fmt --manifest-path apps/shell/src-tauri/Cargo.toml -- --check
+          cargo test --manifest-path apps/shell/src-tauri/Cargo.toml
+          cargo clippy --manifest-path apps/shell/src-tauri/Cargo.toml --all-targets -- -D warnings

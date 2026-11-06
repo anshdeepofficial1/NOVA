@@ -126,4 +126,4 @@ bash scripts/validate-live-build-config.sh
 - Use signed upstream packages, dependency pinning, SBOMs, automated tests, recovery and vulnerability response.
 - Build on upstream Linux/runtime projects and preserve their licenses and notices.
 
-See [architecture](docs/architecture.md), [compatibility policy](docs/compatibility.md), [runtime-adapter policy](docs/runtime-adapters.md), [security model](docs/security.md), [development guide](docs/development.md), [hardware validation matrix](docs/hardware-validation.md), [release gates](docs/release-gates.md), [security reporting](SECURITY.md) and the [ISO builder](os/debian-live/README.md).
+See [architecture](docs/architecture.md), [compatibility policy](docs/compatibility.md), [runtime-adapter policy](docs/runtime-adapters.md), [security model](docs/security.md), [development guide](docs/development.md), [hardware validation matrix](docs/hardware-validation.md), [release gates](docs/release-gates.md), the [Phase 1 completion plan](docs/phase-1-completion-plan.md), [security reporting](SECURITY.md) and the [ISO builder](os/debian-live/README.md).

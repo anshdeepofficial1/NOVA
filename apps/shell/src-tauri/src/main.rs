@@ -40,27 +40,45 @@ fn nova_daemon_is_healthy() -> bool {
         && response.contains("\"service\":\"nova-daemon\"")
 }
 
-/// Give the desktop autostart service time to win the login-session race
-/// before starting a bundled sidecar. This avoids two daemons contending for
-/// the same loopback port when KDE launches both at session startup.
-fn wait_for_existing_daemon() -> bool {
-    let deadline = Instant::now() + Duration::from_secs(3);
+/// Wait briefly for the per-user service to start before launching a
+/// bundled sidecar. This avoids two daemons contending for the same port when
+/// KDE starts the service and desktop application at the same time.
+fn wait_for_existing_daemon_with<F>(
+    mut is_healthy: F,
+    timeout: Duration,
+    retry_interval: Duration,
+) -> bool
+where
+    F: FnMut() -> bool,
+{
+    let deadline = Instant::now() + timeout;
+
     loop {
-        if wait_for_existing_daemon() {
+        if is_healthy() {
             return true;
         }
         if Instant::now() >= deadline {
             return false;
         }
-        std::thread::sleep(Duration::from_millis(150));
+        if !retry_interval.is_zero() {
+            std::thread::sleep(retry_interval);
+        }
     }
+}
+
+fn wait_for_existing_daemon() -> bool {
+    wait_for_existing_daemon_with(
+        nova_daemon_is_healthy,
+        Duration::from_secs(3),
+        Duration::from_millis(150),
+    )
 }
 
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            if nova_daemon_is_healthy() {
+            if wait_for_existing_daemon() {
                 eprintln!("NOVA host service is already running; reusing it.");
                 return Ok(());
             }
@@ -120,4 +138,58 @@ fn main() {
             // and process-group cleanup prevent an orphaned local service.
         }
     });
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn daemon_wait_returns_immediately_when_service_is_healthy() {
+        let mut checks = 0;
+        let ready = wait_for_existing_daemon_with(
+            || {
+                checks += 1;
+                true
+            },
+            Duration::from_secs(1),
+            Duration::ZERO,
+        );
+
+        assert!(ready);
+        assert_eq!(checks, 1);
+    }
+
+    #[test]
+    fn daemon_wait_retries_until_service_becomes_healthy() {
+        let mut checks = 0;
+        let ready = wait_for_existing_daemon_with(
+            || {
+                checks += 1;
+                checks >= 3
+            },
+            Duration::from_secs(1),
+            Duration::ZERO,
+        );
+
+        assert!(ready);
+        assert_eq!(checks, 3);
+    }
+
+    #[test]
+    fn daemon_wait_returns_false_when_service_stays_offline() {
+        let mut checks = 0;
+        let ready = wait_for_existing_daemon_with(
+            || {
+                checks += 1;
+                false
+            },
+            Duration::ZERO,
+            Duration::ZERO,
+        );
+
+        assert!(!ready);
+        assert_eq!(checks, 1);
+    }
 }

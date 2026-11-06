@@ -44,6 +44,8 @@ adapters, cloud services, a custom compositor and AI assistant remain later work
 - Validate the Debian Trixie live-build configuration.
 - Validate the final ISO checksum, BIOS/UEFI boot catalog, EFI loaders/signatures,
   GRUB configuration, ISOLINUX configuration, kernel, initrd and SquashFS.
+- Capture the resolved root npm, Rust workspace and Tauri crate dependency lockfiles;
+  commit them and switch CI builds to locked installation/resolution modes.
 
 ### 5. Rebuild and firmware-test a fresh image
 - Build a fresh ISO from the corrected main-branch commit.
@@ -59,6 +61,7 @@ adapters, cloud services, a custom compositor and AI assistant remain later work
 Phase 1 is accepted only when all of the following are true:
 - M0 source and native desktop CI passes.
 - The desktop daemon-start regression tests pass.
+- npm and both Rust Cargo lockfiles are committed and enforced by CI.
 - The fresh ISO build and structural validation pass.
 - BIOS, standard UEFI and Secure Boot UEFI boot smoke tests all pass.
 - Build artifacts and validation evidence are available from the successful run.

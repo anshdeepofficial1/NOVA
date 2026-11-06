@@ -98,6 +98,14 @@ grep -Fq 'console=ttyS0,115200n8' "$REPORT_DIR/grub-menu.cfg" || fail "generated
 grub-script-check "$REPORT_DIR/grub-config.cfg" > "$REPORT_DIR/grub-config-syntax.txt" 2>&1 || fail "generated GRUB console configuration has invalid syntax"
 grub-script-check "$REPORT_DIR/grub-menu.cfg" > "$REPORT_DIR/grub-menu-syntax.txt" 2>&1 || fail "generated GRUB menu has invalid syntax"
 
+# Check the real BIOS configuration embedded in the output image. A source
+# template can be correct while an override is accidentally omitted.
+xorriso -osirrox on -indev "$ISO" -extract /isolinux/isolinux.cfg "$REPORT_DIR/isolinux.cfg" > "$REPORT_DIR/isolinux-extract.txt" 2>&1 || fail "generated ISOLINUX configuration is missing from the ISO"
+grep -Fxq 'include menu.cfg' "$REPORT_DIR/isolinux.cfg" || fail "generated BIOS menu does not include Debian Live entries"
+grep -Fxq 'default vesamenu.c32' "$REPORT_DIR/isolinux.cfg" || fail "generated BIOS menu is not using the graphical menu"
+grep -Fxq 'prompt 0' "$REPORT_DIR/isolinux.cfg" || fail "generated BIOS menu disables automatic boot"
+grep -Fxq 'timeout 50' "$REPORT_DIR/isolinux.cfg" || fail "generated BIOS menu does not auto-boot after five seconds"
+
 xorriso -indev "$ISO" -ls /live > "$REPORT_DIR/live-files.txt" 2>&1 || fail "the /live directory is missing from the ISO"
 grep -Eiq 'vmlinuz' "$REPORT_DIR/live-files.txt" || fail "live kernel is missing"
 grep -Eiq 'initrd' "$REPORT_DIR/live-files.txt" || fail "live initrd is missing"
@@ -111,6 +119,7 @@ grep -Eiq 'filesystem\.squashfs' "$REPORT_DIR/live-files.txt" || fail "live Squa
   printf 'BIOS El Torito boot entry: present\n'
   printf 'UEFI El Torito boot image: present\n'
   printf 'UEFI fallback loader: present and Secure Boot signed\n'
+  printf 'BIOS ISOLINUX menu: present with 5-second automatic live boot\n'
   printf 'GRUB graphical menu + serial console: present\n'
   printf 'Live kernel/initrd/SquashFS: present\n'
 } | tee "$REPORT_DIR/summary.txt"

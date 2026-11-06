@@ -83,8 +83,8 @@ done
 
 # Inspect the exact GRUB files shipped in the ISO. Kernel arguments alone are
 # insufficient if GRUB itself is not visible to the headless serial harness.
-xorriso -indev "$ISO" -cat /boot/grub/config.cfg > "$REPORT_DIR/grub-config.cfg" 2> "$REPORT_DIR/grub-config-extract.txt" || fail "generated GRUB config.cfg is missing from the ISO"
-xorriso -indev "$ISO" -cat /boot/grub/grub.cfg > "$REPORT_DIR/grub-menu.cfg" 2> "$REPORT_DIR/grub-menu-extract.txt" || fail "generated GRUB grub.cfg is missing from the ISO"
+xorriso -osirrox on -indev "$ISO" -extract /boot/grub/config.cfg "$REPORT_DIR/grub-config.cfg" > "$REPORT_DIR/grub-config-extract.txt" 2>&1 || fail "generated GRUB config.cfg is missing from the ISO"
+xorriso -osirrox on -indev "$ISO" -extract /boot/grub/grub.cfg "$REPORT_DIR/grub-menu.cfg" > "$REPORT_DIR/grub-menu-extract.txt" 2>&1 || fail "generated GRUB grub.cfg is missing from the ISO"
 grep -Fq 'serial --unit=0 --speed=115200' "$REPORT_DIR/grub-config.cfg" || fail "generated GRUB config does not initialize serial COM1"
 grep -Fq 'terminal_output --append serial' "$REPORT_DIR/grub-config.cfg" || fail "generated GRUB config does not mirror output to serial"
 grep -Fq 'source /boot/grub/config.cfg' "$REPORT_DIR/grub-menu.cfg" || fail "generated GRUB menu does not load NOVA's GRUB configuration"

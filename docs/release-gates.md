@@ -16,6 +16,7 @@ This document prevents a roadmap item, a package in an image, or a successful bu
 - The clean build script resolves configuration from source-controlled files and captures a complete build log.
 - Manual or push-triggered amd64 ISO build completes and produces a separate SHA-256 checksum and build manifest.
 - ISO structure validation finds the ISO 9660 filesystem, BIOS and UEFI El Torito entries, live kernel, initrd and SquashFS root filesystem.
+- The generated BIOS ISOLINUX configuration preserves the graphical menu and automatically boots the default live entry after five seconds.
 - A disposable QEMU guest reaches a systemd serial login prompt in both legacy BIOS and UEFI modes.
 - Secure Boot mode is required during image creation; a missing signed shim/GRUB package must fail the build rather than silently downgrade.
 - No disk is modified by the boot smoke test; no virtual disk is attached.

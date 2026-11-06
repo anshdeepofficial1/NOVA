@@ -5,6 +5,7 @@ ROOT_DIR="$(cd -- "$(dirname -- "$0")/.." && pwd)"
 LIVE_DIR="$ROOT_DIR/os/debian-live"
 PACKAGE_LIST="$LIVE_DIR/config/package-lists/nova-desktop.list.chroot"
 GRUB_CONFIG="$LIVE_DIR/config/bootloaders/grub-pc/config.cfg"
+ISOLINUX_CONFIG="$LIVE_DIR/config/bootloaders/isolinux/isolinux.cfg"
 TEMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
@@ -25,7 +26,8 @@ for path in \
   "$LIVE_DIR/config/archives/debian-backports.list.chroot" \
   "$LIVE_DIR/config/archives/debian-backports.list.binary" \
   "$PACKAGE_LIST" \
-  "$GRUB_CONFIG"; do
+  "$GRUB_CONFIG" \
+  "$ISOLINUX_CONFIG"; do
   [[ -s "$path" ]] || fail "required file is missing or empty: $path"
 done
 
@@ -53,6 +55,13 @@ grep -Fq 'source /boot/grub/theme.cfg' "$GRUB_CONFIG" || fail "default NOVA GRUB
 grep -Fq 'insmod gfxterm' "$GRUB_CONFIG" || fail "graphical GRUB terminal must remain available"
 grep -Fq 'terminal_output gfxterm' "$GRUB_CONFIG" || fail "graphical GRUB output must remain the primary display"
 grub-script-check "$GRUB_CONFIG" >/dev/null || fail "custom GRUB configuration has invalid syntax"
+
+# Debian Live defaults Syslinux derivatives to an indefinite timeout. Keep
+# the menu visible but automatically start the default live entry after 5s.
+grep -Fxq 'include menu.cfg' "$ISOLINUX_CONFIG" || fail "ISOLINUX must include the Debian Live menu entries"
+grep -Fxq 'default vesamenu.c32' "$ISOLINUX_CONFIG" || fail "ISOLINUX must use the graphical menu"
+grep -Fxq 'prompt 0' "$ISOLINUX_CONFIG" || fail "ISOLINUX must allow automatic menu timeout"
+grep -Fxq 'timeout 50' "$ISOLINUX_CONFIG" || fail "ISOLINUX must automatically boot after five seconds"
 
 for archive in "$LIVE_DIR/config/archives/debian-backports.list.chroot" "$LIVE_DIR/config/archives/debian-backports.list.binary"; do
   grep -Eq '^[[:space:]]*deb https?://deb\.debian\.org/debian trixie-backports ' "$archive" || fail "unexpected or missing Debian Trixie Backports source in $archive"

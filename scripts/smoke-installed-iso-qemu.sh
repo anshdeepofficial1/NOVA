@@ -96,8 +96,8 @@ d-i keyboard-configuration/xkb-keymap select us
 d-i netcfg/choose_interface select auto
 d-i netcfg/get_hostname string nova-phase2
 d-i netcfg/get_domain string local
-# Proof that Debian Installer actually read the CI-only preseed.
-d-i preseed/early_command string echo NOVA_PHASE2_PRESEED_LOADED >/dev/ttyS0
+# Initrd preseeding occurs before file/network preseed hooks; prove it was
+# applied during the real partitioning stage instead of using early_command.
 d-i mirror/country string manual
 d-i mirror/http/hostname string deb.debian.org
 d-i mirror/http/directory string /debian
@@ -110,7 +110,7 @@ d-i passwd/user-fullname string NOVA CI Tester
 d-i passwd/username string novatest
 d-i passwd/user-password-crypted password $PASSWORD_HASH
 d-i user-setup/allow-password-weak boolean true
-d-i partman/early_command string test "\$(list-devices disk | tr '\\n' ' ')" = "/dev/vda "
+d-i partman/early_command string test "\$(list-devices disk | tr '\\n' ' ')" = "/dev/vda " && echo NOVA_PHASE2_PRESEED_LOADED >/dev/ttyS0
 d-i partman-auto/disk string /dev/vda
 d-i partman-auto/method string regular
 d-i partman-auto/choose_recipe select atomic
@@ -127,10 +127,11 @@ tasksel tasksel/first multiselect
 d-i grub-installer/only_debian boolean true
 d-i grub-installer/with_other_os boolean false
 d-i grub-installer/bootdev string /dev/vda
-d-i preseed/late_command string cp /nova-phase2-firstboot.sh /target/usr/local/sbin/nova-phase2-firstboot.sh; chmod 0700 /target/usr/local/sbin/nova-phase2-firstboot.sh; cp /nova-phase2-firstboot.service /target/etc/systemd/system/nova-phase2-firstboot.service; touch /target/etc/nova-phase2-ci-only; in-target systemctl enable nova-phase2-firstboot.service; mkdir -p /target/etc/default/grub.d; printf 'GRUB_CMDLINE_LINUX_DEFAULT="console=tty0 console=ttyS0,115200n8"\\n' > /target/etc/default/grub.d/nova-phase2-ci.cfg; in-target update-grub
+d-i preseed/late_command string set -e; cp /nova-phase2-firstboot.sh /target/usr/local/sbin/nova-phase2-firstboot.sh; chmod 0700 /target/usr/local/sbin/nova-phase2-firstboot.sh; cp /nova-phase2-firstboot.service /target/etc/systemd/system/nova-phase2-firstboot.service; touch /target/etc/nova-phase2-ci-only; in-target systemctl enable nova-phase2-firstboot.service; mkdir -p /target/etc/default/grub.d; printf 'GRUB_CMDLINE_LINUX_DEFAULT="console=tty0 console=ttyS0,115200n8"\\n' > /target/etc/default/grub.d/nova-phase2-ci.cfg; in-target update-grub; test -s /target/boot/grub/grub.cfg; echo NOVA_PHASE2_INSTALL_COMPLETE >/dev/ttyS0
 d-i finish-install/reboot_in_progress note
-d-i debian-installer/exit/halt boolean true
-d-i debian-installer/exit/poweroff boolean true
+# Do NOT request a kernel halt: QEMU's -no-reboot exits on the real installer
+# reboot, but a halted kernel can leave QEMU running indefinitely.
+d-i cdrom-detect/eject boolean false
 PRESEED
 install -m 0755 "$ROOT/scripts/phase2-firstboot.sh" "$WORK/overlay/nova-phase2-firstboot.sh"
 cat > "$WORK/overlay/nova-phase2-firstboot.service" <<'SERVICE'
@@ -201,6 +202,15 @@ wait_qemu_exit() {
       fi
       return 0
     fi
+    if [[ -n "${WATCH_INSTALL_LOG:-}" && -f "$WATCH_INSTALL_LOG" ]] &&
+       grep -Fq 'reboot: System halted' "$WATCH_INSTALL_LOG"; then
+      WAIT_REASON="unexpected_halt"
+      echo "FAIL: $label halted instead of rebooting; installer completion is not established" >&2
+      kill "$QEMU_PID" 2>/dev/null || true
+      wait "$QEMU_PID" 2>/dev/null || true
+      QEMU_PID=""
+      return 1
+    fi
     # A textual d-i main-menu prompt proves the unattended install is blocked.
     # Fail quickly, preserving the serial log, instead of burning 90 CI minutes.
     if [[ -n "${WATCH_INSTALL_LOG:-}" && -f "$WATCH_INSTALL_LOG" ]] &&
@@ -253,8 +263,13 @@ run_one() {
   fi
   WATCH_INSTALL_LOG=""
   if ! grep -Fq 'NOVA_PHASE2_PRESEED_LOADED' "$install_log"; then
-    echo "FAIL: installer shut down without proving the test preseed was executed" >&2
+    echo "FAIL: installer rebooted without partitioning-stage preseed proof" >&2
     printf 'mode=%s\nresult=FAIL\nstage=installer_preseed_unverified\n' "$mode" > "$result"
+    return 1
+  fi
+  if ! grep -Fq 'NOVA_PHASE2_INSTALL_COMPLETE' "$install_log"; then
+    echo "FAIL: installer rebooted before the target configuration finished" >&2
+    printf 'mode=%s\nresult=FAIL\nstage=installer_completion_unverified\n' "$mode" > "$result"
     return 1
   fi
   # Shutdown by d-i is necessary but not sufficient; installed disk must boot.

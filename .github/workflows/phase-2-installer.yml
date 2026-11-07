@@ -10,14 +10,14 @@ on:
       firmware:
         description: "Firmware install path"
         required: true
-        default: uefi
+        default: all
         type: choice
         options:
           - uefi
           - bios
           - all
   push:
-    branches: [main]
+    branches: [main, "work/**"]
     paths:
       - "scripts/smoke-installed-iso-qemu.sh"
       - "scripts/phase2-firstboot.sh"
@@ -28,7 +28,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: nova-phase-2-installer
+  group: nova-phase-2-installer-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -80,7 +80,7 @@ jobs:
           echo "NOVA_ISO=$iso" >> "$GITHUB_ENV"
       - name: Install to disposable qcow2 and verify disk-only boot
         env:
-          FW_MODE: ${{ inputs.firmware || 'uefi' }}
+          FW_MODE: ${{ inputs.firmware || 'all' }}
         run: |
           sudo bash scripts/smoke-installed-iso-qemu.sh \
             --iso "$NOVA_ISO" \

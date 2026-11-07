@@ -96,6 +96,8 @@ d-i keyboard-configuration/xkb-keymap select us
 d-i netcfg/choose_interface select auto
 d-i netcfg/get_hostname string nova-phase2
 d-i netcfg/get_domain string local
+# Initrd preseeding occurs before file/network preseed hooks; prove it was
+# applied during the real partitioning stage instead of using early_command.
 d-i mirror/country string manual
 d-i mirror/http/hostname string deb.debian.org
 d-i mirror/http/directory string /debian
@@ -108,14 +110,14 @@ d-i passwd/user-fullname string NOVA CI Tester
 d-i passwd/username string novatest
 d-i passwd/user-password-crypted password $PASSWORD_HASH
 d-i user-setup/allow-password-weak boolean true
-d-i partman/early_command string test "\$(list-devices disk | tr '\\n' ' ')" = "/dev/vda "
+d-i partman/early_command string test "\$(list-devices disk | tr '\\n' ' ')" = "/dev/vda " && echo NOVA_PHASE2_PRESEED_LOADED >/dev/ttyS0
 d-i partman-auto/disk string /dev/vda
 d-i partman-auto/method string regular
 d-i partman-auto/choose_recipe select atomic
 d-i partman-partitioning/choose_label select gpt
 d-i partman-partitioning/default_label string gpt
 d-i partman/confirm_write_new_label boolean true
-d-i partman/choose_partition select Finish partitioning and write changes to disk
+d-i partman/choose_partition select finish
 d-i partman/confirm boolean true
 d-i partman/confirm_nooverwrite boolean true
 d-i partman-basicfilesystems/no_swap boolean false
@@ -125,10 +127,11 @@ tasksel tasksel/first multiselect
 d-i grub-installer/only_debian boolean true
 d-i grub-installer/with_other_os boolean false
 d-i grub-installer/bootdev string /dev/vda
-d-i preseed/late_command string cp /nova-phase2-firstboot.sh /target/usr/local/sbin/nova-phase2-firstboot.sh; chmod 0700 /target/usr/local/sbin/nova-phase2-firstboot.sh; cp /nova-phase2-firstboot.service /target/etc/systemd/system/nova-phase2-firstboot.service; touch /target/etc/nova-phase2-ci-only; in-target systemctl enable nova-phase2-firstboot.service; mkdir -p /target/etc/default/grub.d; printf 'GRUB_CMDLINE_LINUX_DEFAULT="console=tty0 console=ttyS0,115200n8"\\n' > /target/etc/default/grub.d/nova-phase2-ci.cfg; in-target update-grub
+d-i preseed/late_command string set -e; cp /nova-phase2-firstboot.sh /target/usr/local/sbin/nova-phase2-firstboot.sh; chmod 0700 /target/usr/local/sbin/nova-phase2-firstboot.sh; cp /nova-phase2-firstboot.service /target/etc/systemd/system/nova-phase2-firstboot.service; touch /target/etc/nova-phase2-ci-only; in-target systemctl enable nova-phase2-firstboot.service; mkdir -p /target/etc/default/grub.d; printf 'GRUB_CMDLINE_LINUX_DEFAULT="console=tty0 console=ttyS0,115200n8"\\n' > /target/etc/default/grub.d/nova-phase2-ci.cfg; in-target update-grub; test -s /target/boot/grub/grub.cfg; echo NOVA_PHASE2_INSTALL_COMPLETE >/dev/ttyS0
 d-i finish-install/reboot_in_progress note
-d-i debian-installer/exit/halt boolean true
-d-i debian-installer/exit/poweroff boolean true
+# Do NOT request a kernel halt: QEMU's -no-reboot exits on the real installer
+# reboot, but a halted kernel can leave QEMU running indefinitely.
+d-i cdrom-detect/eject boolean false
 PRESEED
 install -m 0755 "$ROOT/scripts/phase2-firstboot.sh" "$WORK/overlay/nova-phase2-firstboot.sh"
 cat > "$WORK/overlay/nova-phase2-firstboot.service" <<'SERVICE'
@@ -186,16 +189,44 @@ boot_firmware_args() {
 
 wait_qemu_exit() {
   local limit="$1" label="$2"
-  local waited=0
+  local waited=0 code=0
+  WAIT_REASON=""
   while (( waited < limit )); do
     if ! kill -0 "$QEMU_PID" 2>/dev/null; then
-      wait "$QEMU_PID" || true
+      wait "$QEMU_PID" || code=$?
       QEMU_PID=""
+      if (( code != 0 )); then
+        WAIT_REASON="qemu_exit_$code"
+        echo "FAIL: $label QEMU exited with status $code" >&2
+        return 1
+      fi
       return 0
+    fi
+    if [[ -n "${WATCH_INSTALL_LOG:-}" && -f "$WATCH_INSTALL_LOG" ]] &&
+       grep -Fq 'reboot: System halted' "$WATCH_INSTALL_LOG"; then
+      WAIT_REASON="unexpected_halt"
+      echo "FAIL: $label halted instead of rebooting; installer completion is not established" >&2
+      kill "$QEMU_PID" 2>/dev/null || true
+      wait "$QEMU_PID" 2>/dev/null || true
+      QEMU_PID=""
+      return 1
+    fi
+    # A textual d-i main-menu prompt proves the unattended install is blocked.
+    # Fail quickly, preserving the serial log, instead of burning 90 CI minutes.
+    if [[ -n "${WATCH_INSTALL_LOG:-}" && -f "$WATCH_INSTALL_LOG" ]] &&
+       grep -Fq "Prompt: '?' for help" "$WATCH_INSTALL_LOG"; then
+      WAIT_REASON="interactive_prompt"
+      echo "FAIL: $label requires interactive input despite CI-only preseed" >&2
+      tail -n 60 "$WATCH_INSTALL_LOG" >&2 || true
+      kill "$QEMU_PID" 2>/dev/null || true
+      wait "$QEMU_PID" 2>/dev/null || true
+      QEMU_PID=""
+      return 1
     fi
     sleep 5
     waited=$((waited + 5))
   done
+  WAIT_REASON="timeout"
   echo "TIMEOUT: $label after $limit seconds" >&2
   kill "$QEMU_PID" 2>/dev/null || true
   wait "$QEMU_PID" 2>/dev/null || true
@@ -224,8 +255,21 @@ run_one() {
     -append "auto=true auto-install/enable=true preseed/file=/preseed.cfg priority=critical console=ttyS0,115200n8 DEBIAN_FRONTEND=noninteractive netcfg/choose_interface=auto" \
     > "$OUTPUT/$mode-installer-qemu.log" 2>&1 &
   QEMU_PID=$!
+  WATCH_INSTALL_LOG="$install_log"
   if ! wait_qemu_exit "$INSTALL_TIMEOUT" "$mode installer"; then
-    printf 'mode=%s\nresult=FAIL\nstage=installer_timeout\n' "$mode" > "$result"
+    printf 'mode=%s\nresult=FAIL\nstage=installer_%s\n' "$mode" "$WAIT_REASON" > "$result"
+    WATCH_INSTALL_LOG=""
+    return 1
+  fi
+  WATCH_INSTALL_LOG=""
+  if ! grep -Fq 'NOVA_PHASE2_PRESEED_LOADED' "$install_log"; then
+    echo "FAIL: installer rebooted without partitioning-stage preseed proof" >&2
+    printf 'mode=%s\nresult=FAIL\nstage=installer_preseed_unverified\n' "$mode" > "$result"
+    return 1
+  fi
+  if ! grep -Fq 'NOVA_PHASE2_INSTALL_COMPLETE' "$install_log"; then
+    echo "FAIL: installer rebooted before the target configuration finished" >&2
+    printf 'mode=%s\nresult=FAIL\nstage=installer_completion_unverified\n' "$mode" > "$result"
     return 1
   fi
   # Shutdown by d-i is necessary but not sufficient; installed disk must boot.
@@ -239,9 +283,19 @@ run_one() {
   local waited=0
   while (( waited < BOOT_TIMEOUT )); do
     if [[ -f "$boot_log" ]] && grep -Fq 'NOVA_PHASE2_GUEST_PASS' "$boot_log"; then
-      echo "PASS: $mode installed NOVA booted without ISO and verified desktop packages + daemon"
-      printf 'mode=%s\nresult=PASS\npostinstall=verified\n' "$mode" > "$result"
-      wait_qemu_exit 90 "$mode guest shutdown" || true
+      if ! grep -Fq "NOVA_PHASE2_FIRMWARE=$mode" "$boot_log" ||
+         ! grep -Fq 'NOVA_PHASE2_ROOT_SOURCE=' "$boot_log" ||
+         ! grep -Fq 'NOVA_PHASE2_ROOT_FSTYPE=' "$boot_log"; then
+        echo "FAIL: installed guest firmware or root-filesystem evidence is missing/mismatched" >&2
+        printf 'mode=%s\nresult=FAIL\nstage=installed_boot_evidence\n' "$mode" > "$result"
+        return 1
+      fi
+      if ! wait_qemu_exit 90 "$mode guest shutdown"; then
+        printf 'mode=%s\nresult=FAIL\nstage=guest_shutdown_%s\n' "$mode" "$WAIT_REASON" > "$result"
+        return 1
+      fi
+      echo "PASS: $mode installed NOVA booted without ISO, passed guest checks and shut down cleanly"
+      printf 'mode=%s\nresult=PASS\npostinstall=verified\nshutdown=verified\n' "$mode" > "$result"
       return 0
     fi
     if [[ -f "$boot_log" ]] && grep -Fq 'NOVA_PHASE2_GUEST_FAIL' "$boot_log"; then

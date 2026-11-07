@@ -58,7 +58,7 @@ jobs:
             libxdo-dev libssl-dev \
             libayatana-appindicator3-dev librsvg2-dev \
             qemu-system-x86 qemu-utils ovmf \
-            xvfb dbus-daemon
+            xvfb dbus-daemon xdotool
 
       - name: Verify Rust source and committed dependency locks
         run: |

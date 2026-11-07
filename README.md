@@ -2,7 +2,7 @@
 
 NOVA is a hybrid operating-system project: a bootable Linux desktop for physical PCs, a native desktop workspace, application compatibility runtimes, and a separately deployed cloud-workspace service.
 
-> **Status: experimental foundation.** The repository contains a Debian live-image recipe, a native Tauri desktop app, a Rust host API and runtime-prerequisite discovery. The ISO build pipeline now validates the live-build configuration, checks the ISO boot catalog and live filesystem, and runs headless BIOS/UEFI QEMU boot smoke tests. A successful workflow run and physical-device acceptance are still required before claiming the image is validated. APK/EXE/DMG execution, cloud workspaces and a production NOVA compositor are not complete.
+> **Phase 1 COMPLETE (M0 + M1, November 7, 2026).** The native desktop/daemon CI and the Debian Trixie amd64 live ISO are validated on [CI #149](https://github.com/anshdeepofficial1/NOVA/actions/runs/42355442117) and [ISO #37](https://github.com/anshdeepofficial1/NOVA/actions/runs/42355442136). BIOS, UEFI and Secure Boot UEFI all reached the systemd serial login prompt in QEMU. The ISO and boot diagnostics are available as workflow artifacts. **NOVA remains an experimental development OS**: installation and physical hardware acceptance, production APK/EXE/DMG execution, cloud workspaces, and a custom compositor are later milestones.
 
 ## Product architecture
 
@@ -47,15 +47,15 @@ A website cannot directly execute arbitrary APK, EXE or DMG files on the user's 
 - Debian Trixie live-build recipe with KDE, live installer, Waydroid backports, Wine, QEMU/KVM, Flatpak and NOVA components.
 - Explicit Syslinux/GRUB EFI bootloader selection, strict Debian signed shim/GRUB Secure Boot mode and in-image SHA-256 checksums.
 - Clean/reuse-cache image build orchestration with source-derived timestamps, build logs and an ISO build manifest.
-- Live-build parser validation, ISO 9660/El Torito/kernel/initrd/SquashFS structural validation and headless QEMU smoke-test code for BIOS and UEFI.
+- Live-build parser validation, ISO 9660/El Torito/kernel/initrd/SquashFS structural validation and successful headless QEMU smoke tests for BIOS, UEFI and Secure Boot UEFI.
 - Per-user systemd service for the local NOVA daemon in the image, plus KDE/XDG autostart for the NOVA Desktop.
 - Debian Backports repository configured in both the live-build chroot and installed system for maintained Waydroid updates.
-- Automated Rust unit, Clippy, daemon HTTP smoke, frontend and native Debian package CI; dedicated image workflow.
+- Passing locked-dependency Rust unit/Clippy, daemon HTTP security-boundary smoke, frontend, native Debian package and packaged-app sidecar lifecycle CI; dedicated successful image workflow.
 - Dependabot updates for GitHub Actions, npm and Cargo dependencies.
 
 ## Not implemented yet
 
-- A release-quality ISO validated on physical PCs and a completed successful BIOS/UEFI workflow run.
+- Release-quality certification on physical PCs, install/reboot acceptance, upgrade/recovery tests and graphical-session hardware validation (the experimental QEMU live ISO and firmware boot tests are validated).
 - A custom NOVA Wayland compositor, window manager, login manager or full desktop session. The first image uses KDE Plasma.
 - Production install/launch adapters for APK, EXE/MSI, DEB, AppImage or Flatpak.
 - Production cryptographic approval signer/verifier and secure key storage. The policy crate currently provides the fail-closed contract and a test verifier only.
@@ -96,6 +96,12 @@ npm run desktop:build
 ```
 
 The native Tauri app waits briefly for the NOVA user service and reuses it when healthy; otherwise it starts its bundled daemon sidecar. The sidecar is terminated with the desktop app. The live image autostarts the NOVA Desktop at KDE/XDG graphical login. The browser-only Vite preview still requires `cargo run -p nova-daemon` in another terminal. The daemon is deliberately read-only today: capability lookup and package planning only. It does not install software, call a shell, start a VM or execute a selected file.
+
+## Phase 1 acceptance evidence
+
+- [CI #149 — PASS](https://github.com/anshdeepofficial1/NOVA/actions/runs/42355442117): desktop and daemon source, build, tests and normal-close sidecar cleanup.
+- [ISO #37 — PASS](https://github.com/anshdeepofficial1/NOVA/actions/runs/42355442136): live-image checksum/structure and BIOS (**86 s**), UEFI (**92 s**) and Secure Boot UEFI (**88 s**) boot smoke tests.
+- ISO SHA-256: `fa7795a78492a8f4fa4b77303de11f5e589e1d35cd360b7ae6a0c032876462a3`. Download the `NOVA-OS-amd64-experimental` artifact from the ISO run. See the [Phase 1 completion record](docs/phase-1-completion-plan.md) for acceptance scope and limitations.
 
 ## Build the bootable image
 

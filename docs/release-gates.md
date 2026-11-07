@@ -5,6 +5,8 @@ This document prevents a roadmap item, a package in an image, or a successful bu
 ## Product milestones
 
 ### M0 — Source foundation
+**Status: Accepted (Phase 1, November 7, 2026).** [CI #149](https://github.com/anshdeepofficial1/NOVA/actions/runs/42355442117) passed on source commit `a89452a`.
+
 - Workspace compiles with warnings denied.
 - Unit tests and API smoke tests pass.
 - TypeScript checks and production build pass.
@@ -12,6 +14,8 @@ This document prevents a roadmap item, a package in an image, or a successful bu
 - Dependency and build provenance are recorded.
 
 ### M1 — Bootable development image
+**Status: Accepted (Phase 1, November 7, 2026).** [ISO #37](https://github.com/anshdeepofficial1/NOVA/actions/runs/42355442136) passed source validation, checksum, boot structure and QEMU BIOS (86 s), UEFI (92 s), Secure Boot UEFI (88 s); image and evidence artifacts uploaded.
+
 - The version-controlled Debian Live configuration passes the Trixie live-build parser validation.
 - The clean build script resolves configuration from source-controlled files and captures a complete build log.
 - Manual or push-triggered amd64 ISO build completes and produces a separate SHA-256 checksum and build manifest.

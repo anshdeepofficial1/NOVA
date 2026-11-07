@@ -1,6 +1,6 @@
 # NOVA Phase 1 Completion Plan
 
-**Status:** In progress  
+**Status:** Complete — M0 and M1 accepted on November 7, 2026  
 **Scope:** M0 — Source foundation and M1 — Bootable development image  
 **Target:** Debian 13 (Trixie), amd64, KDE Plasma/Wayland
 
@@ -67,6 +67,21 @@ Phase 1 is accepted only when all of the following are true:
 - BIOS, standard UEFI and Secure Boot UEFI boot smoke tests all pass.
 - Build artifacts and validation evidence are available from the successful run.
 - The README/release-gate status reflects the verified state.
+
+## Verified Phase 1 acceptance — November 7, 2026
+
+**Validated source commit:** [`a89452a96fd75784fb913000442468995340e08f`](https://github.com/anshdeepofficial1/NOVA/commit/a89452a96fd75784fb913000442468995340e08f)
+
+**Acceptance evidence:**
+- [NOVA CI #149 — success](https://github.com/anshdeepofficial1/NOVA/actions/runs/42355442117): source formatting, unit tests, Clippy, Trixie live-build configuration, locked dependencies, frontend typecheck/build, daemon API including malformed/oversized requests, native `.deb` build, actual packaged-desktop start/normal-close sidecar cleanup, and Tauri regression tests.
+- [Build NOVA ISO #37 — success](https://github.com/anshdeepofficial1/NOVA/actions/runs/42355442136): fresh ISO, checksum verification, boot structure, signed EFI loaders, GRUB and five-second ISOLINUX menu validation, all three QEMU firmware boot tests, and archived artifacts.
+- **Firmware results from uploaded QEMU diagnostics:** BIOS **PASS** (86 seconds), UEFI **PASS** (92 seconds), Secure Boot UEFI **PASS** (88 seconds). All reached the live system's systemd serial login prompt.
+- **ISO artifact:** `NOVA-OS-amd64-experimental`, size **3,412,525,056 bytes**, SHA-256 `fa7795a78492a8f4fa4b77303de11f5e589e1d35cd360b7ae6a0c032876462a3`. The [successful ISO run](https://github.com/anshdeepofficial1/NOVA/actions/runs/42355442136) supplies the image, checksum, build manifest, logs and validation archive.
+- **Boot diagnostics artifact:** `NOVA-ISO-boot-diagnostics` (same run), containing per-firmware result files, serial logs, screenshots and boot-structure reports.
+
+**Decision:** Phase 1 (M0 + M1) is COMPLETE. Phase 2 may proceed.
+
+**Scope limit:** This verifies a bootable *development/live* ISO under QEMU. It does **not** certify an installed operating system, physical hardware, production app execution compatibility, graphical UI on real hardware, disk migration/recovery, or a stable public release; these have their own later milestones.
 
 ## Explicit non-goals for Phase 1
 

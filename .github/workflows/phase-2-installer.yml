@@ -73,6 +73,14 @@ jobs:
           echo "run_id=$run" >> "$GITHUB_OUTPUT"
           gh run view "$run" --json conclusion,headSha --jq '{conclusion,headSha}'
           [[ "$(gh run view "$run" --json conclusion --jq .conclusion)" == success ]]
+          # Never silently accept a stale ISO after main changes. A branch push
+          # must test the current main ISO; explicit run IDs are still checked.
+          iso_sha="$(gh run view "$run" --json headSha --jq .headSha)"
+          main_sha="$(gh api repos/${GITHUB_REPOSITORY}/git/ref/heads/main --jq .object.sha)"
+          if [[ "$iso_sha" != "$main_sha" ]]; then
+            echo "::error::ISO run $run uses $iso_sha, but main is $main_sha; rebuild the ISO before installed acceptance."
+            exit 1
+          fi
       - name: Download exact tested NOVA ISO artifact
         env:
           GH_TOKEN: ${{ github.token }}

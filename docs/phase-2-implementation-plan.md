@@ -64,9 +64,10 @@ cloud, AI and Web OS are subsequent phases, not Phase 2 sign-off shortcuts.
 - [x] Add CI-only virtual disk installation and first-boot acceptance harness
       (implementation created; PASS evidence pending).
 - [x] Add isolated GitHub Actions installer workflow using successful ISO artifacts.
-- [ ] Installer boots and finishes unattended on UEFI VM.
-- [ ] Installed UEFI guest boots without ISO and passes actual daemon/desktop tests.
-- [ ] BIOS installer and installed BIOS boot pass.
+- [x] UEFI installer finishes unattended (main run #9, exact serial completion marker).
+- [x] Installed UEFI guest boots without ISO and passes daemon-health and
+      installed desktop **package** checks; this is NOT graphical-login acceptance.
+- [x] BIOS installer finishes and installed BIOS disk-only boot passes (main run #9).
 - [ ] Graphical KDE session is tested end to end in VM.
 - [ ] Signed updates, encrypted layout, snapshot rollback and recovery tested.
 - [ ] Hardware test matrix and physical-device testing covered with evidence.
@@ -78,6 +79,17 @@ UEFI/BIOS acceptance item.
 ## Evidence
 
 - [Phase 1 green ISO #37](https://github.com/anshdeepofficial1/NOVA/actions/runs/42355442136)
+- [Phase 2 main-branch installed-VM #9](https://github.com/anshdeepofficial1/NOVA/actions/runs/42377127844):
+  the diagnostic ZIP artifact `NOVA-Phase2-installation-diagnostics`
+  (artifact 13576318021) contains separate `uefi-result.txt` and
+  `bios-result.txt`, both `result=PASS` and `shutdown=verified`.
+  Both installer logs contain `NOVA_PHASE2_PRESEED_LOADED` and
+  `NOVA_PHASE2_INSTALL_COMPLETE`. Both installed guest logs confirm
+  `NOVA_PHASE2_GUEST_PASS`, real `/dev/vda2` ext4 root, matching firmware,
+  daemon health, installed desktop packages and clean poweroff. This is
+  **ext4 unattended installer/disk-only boot** acceptance only. It is not
+  actual KDE login, Btrfs/LUKS, snapshot rollback or physical hardware evidence.
+
 - [Phase 2 installer workflow](https://github.com/anshdeepofficial1/NOVA/actions/workflows/phase-2-installer.yml)
 - Per-test logs: `NOVA-Phase2-installation-diagnostics` artifact from each run.
 - Readiness and scope: [release gates](release-gates.md),

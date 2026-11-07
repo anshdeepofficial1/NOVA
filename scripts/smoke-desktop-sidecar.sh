@@ -14,7 +14,12 @@ for tool in sudo apt-get curl dbus-run-session xvfb-run timeout; do
   }
 done
 
-sudo apt-get install -y --no-install-recommends "$PACKAGE"
+case "$PACKAGE" in
+  /*|./*) PACKAGE_PATH="$PACKAGE" ;;
+  *) PACKAGE_PATH="./$PACKAGE" ;;
+esac
+
+sudo apt-get install -y --no-install-recommends "$PACKAGE_PATH"
 
 # Run the actual installed Tauri package in a disposable graphical session.
 # A missing/early-exiting application, unavailable sidecar, wrong API response,

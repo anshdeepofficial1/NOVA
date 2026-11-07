@@ -221,7 +221,7 @@ run_one() {
     -drive "if=virtio,format=qcow2,file=$disk" \
     -cdrom "$ISO" -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
     "${FW_ARGS[@]}" -kernel "$WORK/vmlinuz" -initrd "$WORK/test-initrd.gz" \
-    -append "auto=true priority=critical console=ttyS0,115200n8 DEBIAN_FRONTEND=text netcfg/choose_interface=auto" \
+    -append "auto=true auto-install/enable=true preseed/file=/preseed.cfg priority=critical console=ttyS0,115200n8 DEBIAN_FRONTEND=noninteractive netcfg/choose_interface=auto" \
     > "$OUTPUT/$mode-installer-qemu.log" 2>&1 &
   QEMU_PID=$!
   if ! wait_qemu_exit "$INSTALL_TIMEOUT" "$mode installer"; then

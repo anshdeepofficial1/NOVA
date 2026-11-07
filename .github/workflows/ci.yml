@@ -90,6 +90,19 @@ jobs:
             -d '{"path":"example.unknown"}')"
           test "$unsupported_status" = "415"
 
+          malformed_status="$(curl -sS -o "$RUNNER_TEMP/nova-malformed.json" -w "%{http_code}" \
+            -X POST http://127.0.0.1:47820/api/compatibility/inspect \
+            -H 'Content-Type: application/json' \
+            -d '{"path":')"
+          test "$malformed_status" = "400"
+
+          python3 -c 'print("{\\"path\\":\\"" + ("x" * 9000) + "\\"}")' > "$RUNNER_TEMP/nova-oversized.json"
+          oversized_status="$(curl -sS -o "$RUNNER_TEMP/nova-oversized-response.json" -w "%{http_code}" \
+            -X POST http://127.0.0.1:47820/api/compatibility/inspect \
+            -H 'Content-Type: application/json' \
+            --data-binary @"$RUNNER_TEMP/nova-oversized.json")"
+          test "$oversized_status" = "413"
+
   shell:
     name: Shell and native desktop checks
     runs-on: ubuntu-24.04

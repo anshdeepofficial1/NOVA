@@ -7,10 +7,7 @@ use std::{
 };
 
 use tauri::Manager;
-use tauri_plugin_shell::{
-    process::CommandEvent,
-    ShellExt,
-};
+use tauri_plugin_shell::{process::CommandEvent, ShellExt};
 
 /// Check whether NOVA's user-session service is already running.
 ///
@@ -25,8 +22,7 @@ fn nova_daemon_is_healthy() -> bool {
 
     let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
 
-    let request =
-        b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    let request = b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
     if stream.write_all(request).is_err() {
         return false;
     }
@@ -36,8 +32,7 @@ fn nova_daemon_is_healthy() -> bool {
     let _ = stream.read_to_end(&mut response);
 
     let response = String::from_utf8_lossy(&response);
-    response.starts_with("HTTP/1.1 200")
-        && response.contains("\"service\":\"nova-daemon\"")
+    response.starts_with("HTTP/1.1 200") && response.contains("\"service\":\"nova-daemon\"")
 }
 
 /// Wait briefly for the per-user service to start before launching a
@@ -91,9 +86,7 @@ fn main() {
 
             match sidecar {
                 Ok(command) => {
-                    let command = command
-                        .kill_on_drop(true)
-                        .set_process_group(true);
+                    let command = command.kill_on_drop(true).set_process_group(true);
 
                     match command.spawn() {
                         Ok((mut events, child)) => {
@@ -139,7 +132,6 @@ fn main() {
         }
     });
 }
-
 
 #[cfg(test)]
 mod tests {

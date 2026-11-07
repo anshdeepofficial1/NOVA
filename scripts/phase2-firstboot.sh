@@ -121,4 +121,49 @@ grep -qi 'ok' /run/nova-phase2-health.json
 stop_daemon
 trap finish EXIT
 echo "NOVA_PHASE2_DAEMON_HEALTH_OK"
+
+# CI-ONLY graphical mode: the test account is autologged in solely on a
+# disposable guest disk. Do not infer a GUI from installed Debian packages.
+if [[ -f /etc/nova-phase2-ci-graphical ]]; then
+  systemctl is-active --quiet display-manager.service || {
+    echo "SDDM display manager is not active"
+    exit 1
+  }
+  test -s /usr/share/wayland-sessions/plasma.desktop
+  assert_binary pgrep
+  assert_binary loginctl
+  uid="$(id -u novatest)"
+  graphical_ready=0
+  for attempt in $(seq 1 150); do
+    while read -r session_id _; do
+      [[ "$session_id" =~ ^[0-9]+$ ]] || continue
+      session_name="$(loginctl show-session "$session_id" -p Name --value 2>/dev/null || true)"
+      session_type="$(loginctl show-session "$session_id" -p Type --value 2>/dev/null || true)"
+      session_active="$(loginctl show-session "$session_id" -p Active --value 2>/dev/null || true)"
+      if [[ "$session_name" == novatest && "$session_type" == wayland &&
+            "$session_active" == yes ]] &&
+         pgrep -u "$uid" -x kwin_wayland >/dev/null &&
+         pgrep -u "$uid" -x nova-shell >/dev/null; then
+        graphical_ready=1
+        echo "NOVA_PHASE2_GUI_SESSION_ID=$session_id"
+        echo "NOVA_PHASE2_GUI_SESSION_TYPE=$session_type"
+        break
+      fi
+    done < <(loginctl list-sessions --no-legend 2>/dev/null || true)
+    (( graphical_ready == 1 )) && break
+    sleep 1
+  done
+  if (( graphical_ready != 1 )); then
+    echo "NOVA graphical Wayland login or shell did not become ready"
+    systemctl --no-pager status display-manager.service || true
+    journalctl --no-pager -u sddm.service -n 70 || true
+    loginctl list-sessions --no-legend || true
+    exit 1
+  fi
+  echo "NOVA_PHASE2_GRAPHICAL_SESSION_OK"
+  # Keep the disposable guest active so the host can capture the real VGA
+  # framebuffer before the guest completes its automated shutdown.
+  sleep 15
+fi
+
 echo "NOVA_PHASE2_GUEST_PASS"

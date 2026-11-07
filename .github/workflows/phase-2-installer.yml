@@ -95,6 +95,15 @@ jobs:
             --output-dir "$RUNNER_TEMP/nova-installed" \
             --install-timeout 5400 \
             --boot-timeout 1200
+      - name: Validate real SDDM Wayland and NOVA Desktop user session
+        run: |
+          sudo bash scripts/smoke-installed-iso-qemu.sh \
+            --iso "$NOVA_ISO" \
+            --firmware uefi \
+            --graphical \
+            --output-dir "$RUNNER_TEMP/nova-installed-graphical" \
+            --install-timeout 5400 \
+            --boot-timeout 1200
       - name: Upload installation and first-boot diagnostics
         if: always()
         uses: actions/upload-artifact@v7
@@ -103,5 +112,8 @@ jobs:
           path: |
             ${{ runner.temp }}/nova-installed/*.log
             ${{ runner.temp }}/nova-installed/*-result.txt
+            ${{ runner.temp }}/nova-installed-graphical/*.log
+            ${{ runner.temp }}/nova-installed-graphical/*-result.txt
+            ${{ runner.temp }}/nova-installed-graphical/*-graphical-session.ppm
           if-no-files-found: warn
           retention-days: 14

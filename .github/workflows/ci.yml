@@ -31,6 +31,8 @@ jobs:
           bash -n scripts/phase2-firstboot.sh
           bash -n scripts/test-smoke-iso-qemu.sh
           bash -n scripts/smoke-desktop-sidecar.sh
+          bash -n os/debian-live/config/includes.chroot/usr/local/sbin/nova-firstboot-init
+          sh -n os/debian-live/config/hooks/live/9000-enable-nova-firstboot.hook.chroot
           bash -n os/debian-live/build.sh
           bash -n os/debian-live/auto/build
           sh -n os/debian-live/auto/config

@@ -27,6 +27,8 @@ jobs:
           bash -n scripts/validate-live-build-config.sh
           bash -n scripts/validate-iso.sh
           bash -n scripts/smoke-iso-qemu.sh
+          bash -n scripts/smoke-installed-iso-qemu.sh
+          bash -n scripts/phase2-firstboot.sh
           bash -n scripts/test-smoke-iso-qemu.sh
           bash -n scripts/smoke-desktop-sidecar.sh
           bash -n os/debian-live/build.sh

@@ -122,7 +122,7 @@ jobs:
             libssl-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            xvfb dbus-daemon xdotool
+            xvfb dbus-daemon openbox wmctrl
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build

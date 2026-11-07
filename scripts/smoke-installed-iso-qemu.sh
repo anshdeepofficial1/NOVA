@@ -143,11 +143,15 @@ SERVICE
 # Appending an uncompressed cpio archive to an uncompressed initrd is supported
 # by the initramfs format. No preseed is placed inside the release ISO itself.
 gzip -dc "$WORK/original-initrd.gz" > "$WORK/initrd.raw"
-( cd "$WORK/overlay"; find . -print0 | cpio --null -o -H newc --quiet ) >> "$WORK/initrd.raw"
+( cd "$WORK/overlay"; find . -print0 | cpio --null -o -H newc --quiet ) > "$WORK/ci-overlay.cpio"
+# GNU cpio stops at the first archive trailer, so verify the injected archive
+# separately before concatenating it to the original Debian Installer initrd.
+overlay_entries="$(cpio -it --quiet < "$WORK/ci-overlay.cpio")"
+grep -Fxq './preseed.cfg' <<< "$overlay_entries" || fail "CI preseed missing from overlay"
+grep -Fxq './nova-phase2-firstboot.sh' <<< "$overlay_entries" || fail "CI guest probe missing from overlay"
+cat "$WORK/ci-overlay.cpio" >> "$WORK/initrd.raw"
 gzip -1 -c "$WORK/initrd.raw" > "$WORK/test-initrd.gz"
 [[ -s "$WORK/test-initrd.gz" ]] || fail "could not generate CI installer initrd"
-# Confirm appended test files exist before we let the guest touch its disk.
-gzip -dc "$WORK/test-initrd.gz" | cpio -it --quiet 2>/dev/null | grep -Fq './preseed.cfg' || fail "test preseed not present in generated initrd"
 
 ACCEL="tcg,thread=multi"
 if [[ -r /dev/kvm && -w /dev/kvm ]]; then ACCEL="kvm"; fi

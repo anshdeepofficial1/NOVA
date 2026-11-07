@@ -5,7 +5,7 @@ set -Eeuo pipefail
 exec > /dev/ttyS0 2>&1
 
 finish() {
-  status=$?
+  status="${1:-$?}"
   trap - EXIT
   if (( status != 0 )); then
     echo "NOVA_PHASE2_GUEST_FAIL status=$status"
@@ -60,7 +60,7 @@ stop_daemon() {
   kill "$daemon_pid" 2>/dev/null || true
   wait "$daemon_pid" 2>/dev/null || true
 }
-trap 'stop_daemon; finish' EXIT
+trap 'status=$?; stop_daemon; finish "$status"' EXIT
 ready=0
 for attempt in $(seq 1 30); do
   if curl --fail --silent --show-error --max-time 2 http://127.0.0.1:47820/health >/run/nova-phase2-health.json 2>/dev/null; then

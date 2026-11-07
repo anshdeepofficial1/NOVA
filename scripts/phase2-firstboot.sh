@@ -50,6 +50,24 @@ if [[ -d /sys/firmware/efi ]]; then
 else
   firmware=bios
 fi
+# The expected filesystem is written by the actual installer late hook.
+# This must match the mounted installed root, not merely an installed package.
+if [[ -s /etc/nova-phase2-expected-fstype ]]; then
+  expected_fstype="$(cat /etc/nova-phase2-expected-fstype)"
+  [[ "$root_fstype" == "$expected_fstype" ]] || {
+    echo "Installed root filesystem mismatch: expected $expected_fstype got $root_fstype"
+    exit 1
+  }
+  if [[ "$expected_fstype" == "btrfs" ]]; then
+    assert_binary btrfs
+    btrfs subvolume show / || {
+      echo "Btrfs root is not an actual subvolume"
+      exit 1
+    }
+    echo "NOVA_PHASE2_BTRFS_SUBVOLUME_OK"
+  fi
+  echo "NOVA_PHASE2_STORAGE_POLICY_OK"
+fi
 echo "NOVA_PHASE2_ROOT_SOURCE=$root_source"
 echo "NOVA_PHASE2_ROOT_FSTYPE=$root_fstype"
 echo "NOVA_PHASE2_FIRMWARE=$firmware"

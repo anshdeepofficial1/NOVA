@@ -79,7 +79,7 @@ cargo run -p nova-daemon
 Terminal 2 — start the browser development shell:
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 

@@ -252,6 +252,11 @@ run_one() {
     return 1
   fi
   WATCH_INSTALL_LOG=""
+  if ! grep -Fq 'NOVA_PHASE2_PRESEED_LOADED' "$install_log"; then
+    echo "FAIL: installer shut down without proving the test preseed was executed" >&2
+    printf 'mode=%s\nresult=FAIL\nstage=installer_preseed_unverified\n' "$mode" > "$result"
+    return 1
+  fi
   # Shutdown by d-i is necessary but not sufficient; installed disk must boot.
   echo "Installer exited, now booting $mode virtual disk with ISO REMOVED"
   "$QEMU" -machine q35 -accel "$ACCEL" -cpu max -m "$RAM_MIB" -smp "$CPUS" -vga std -display none \

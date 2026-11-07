@@ -1,0 +1,100 @@
+name: Phase 2 - Installed NOVA VM Acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      iso_run_id:
+        description: "Successful Build NOVA ISO run ID (leave empty for latest green)"
+        required: false
+        type: string
+      firmware:
+        description: "Firmware install path"
+        required: true
+        default: uefi
+        type: choice
+        options:
+          - uefi
+          - bios
+          - all
+  push:
+    branches: [main]
+    paths:
+      - "scripts/smoke-installed-iso-qemu.sh"
+      - "scripts/phase2-firstboot.sh"
+      - ".github/workflows/phase-2-installer.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: nova-phase-2-installer
+  cancel-in-progress: true
+
+jobs:
+  install-from-iso:
+    name: Install ISO onto blank qcow2 and reboot without ISO
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install virtual machine and ISO tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 qemu-utils ovmf xorriso cpio gzip openssl python3
+      - name: Static safety and syntax checks
+        run: |
+          bash -n scripts/smoke-installed-iso-qemu.sh
+          bash -n scripts/phase2-firstboot.sh
+          grep -Fq 'partman-auto/disk string /dev/vda' scripts/smoke-installed-iso-qemu.sh
+          grep -Fq 'if=virtio,format=qcow2,file=$disk' scripts/smoke-installed-iso-qemu.sh
+          grep -Fq 'refusing to overwrite existing disk' scripts/smoke-installed-iso-qemu.sh
+          grep -Fq 'NOVA_PHASE2_GUEST_PASS' scripts/phase2-firstboot.sh
+      - name: Select passed source ISO build
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_RUN: ${{ inputs.iso_run_id }}
+        run: |
+          if [[ -n "$REQUESTED_RUN" ]]; then
+            run="$REQUESTED_RUN"
+          else
+            run="$(gh run list --workflow build-iso.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
+          fi
+          [[ "$run" =~ ^[0-9]+$ ]] || { echo "No successful ISO workflow run found"; exit 1; }
+          echo "run_id=$run" >> "$GITHUB_OUTPUT"
+          gh run view "$run" --json conclusion,headSha --jq '{conclusion,headSha}'
+          [[ "$(gh run view "$run" --json conclusion --jq .conclusion)" == success ]]
+      - name: Download exact tested NOVA ISO artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.source.outputs.run_id }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/nova-iso"
+          gh run download "$RUN_ID" --name NOVA-OS-amd64-experimental --dir "$RUNNER_TEMP/nova-iso"
+          find "$RUNNER_TEMP/nova-iso" -name '*.iso' -size +100M -print
+          find "$RUNNER_TEMP/nova-iso" -name '*.sha256' -size +0c -print
+          iso="$(find "$RUNNER_TEMP/nova-iso" -name 'live-image-amd64.hybrid.iso' -print -quit)"
+          [[ -s "$iso" && -s "$iso.sha256" ]]
+          echo "NOVA_ISO=$iso" >> "$GITHUB_ENV"
+      - name: Install to disposable qcow2 and verify disk-only boot
+        env:
+          FW_MODE: ${{ inputs.firmware || 'uefi' }}
+        run: |
+          sudo bash scripts/smoke-installed-iso-qemu.sh \
+            --iso "$NOVA_ISO" \
+            --firmware "$FW_MODE" \
+            --output-dir "$RUNNER_TEMP/nova-installed" \
+            --install-timeout 5400 \
+            --boot-timeout 1200
+      - name: Upload installation and first-boot diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: NOVA-Phase2-installation-diagnostics
+          path: |
+            ${{ runner.temp }}/nova-installed/*.log
+            ${{ runner.temp }}/nova-installed/*-result.txt
+          if-no-files-found: warn
+          retention-days: 14

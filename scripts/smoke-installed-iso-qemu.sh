@@ -283,6 +283,13 @@ run_one() {
   local waited=0
   while (( waited < BOOT_TIMEOUT )); do
     if [[ -f "$boot_log" ]] && grep -Fq 'NOVA_PHASE2_GUEST_PASS' "$boot_log"; then
+      # A guest pass alone can come from an older ISO without production firstboot.
+      # Require the marker from the installed system before accepting this release gate.
+      if ! grep -Fxq 'NOVA_PHASE2_PRODUCTION_FIRSTBOOT_OK' "$boot_log"; then
+        echo "FAIL: installed production firstboot marker missing" >&2
+        printf 'mode=%s\nresult=FAIL\nstage=production_firstboot_unverified\n' "$mode" > "$result"
+        return 1
+      fi
       if ! grep -Fq "NOVA_PHASE2_FIRMWARE=$mode" "$boot_log" ||
          ! grep -Fq 'NOVA_PHASE2_ROOT_SOURCE=' "$boot_log" ||
          ! grep -Fq 'NOVA_PHASE2_ROOT_FSTYPE=' "$boot_log"; then

@@ -8,7 +8,10 @@ use std::{
 };
 
 use tauri::Manager;
-use tauri_plugin_shell::{process::{CommandChild, CommandEvent}, ShellExt};
+use tauri_plugin_shell::{
+    process::{CommandChild, CommandEvent},
+    ShellExt,
+};
 
 struct ManagedSidecar(Mutex<Option<CommandChild>>);
 
@@ -131,15 +134,16 @@ fn main() {
         if let tauri::RunEvent::Exit = event {
             // App state can outlive this callback. Take ownership and
             // synchronously stop/reap the process group before returning.
-            let child = app_handle.try_state::<ManagedSidecar>().and_then(|state| {
-                match state.0.lock() {
-                    Ok(mut child) => child.take(),
-                    Err(error) => {
-                        eprintln!("Could not lock NOVA sidecar state during shutdown: {error}");
-                        None
-                    }
-                }
-            });
+            let child =
+                app_handle
+                    .try_state::<ManagedSidecar>()
+                    .and_then(|state| match state.0.lock() {
+                        Ok(mut child) => child.take(),
+                        Err(error) => {
+                            eprintln!("Could not lock NOVA sidecar state during shutdown: {error}");
+                            None
+                        }
+                    });
 
             if let Some(child) = child {
                 if let Err(error) = child.kill() {

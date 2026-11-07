@@ -268,6 +268,13 @@ run_one() {
   local waited=0
   while (( waited < BOOT_TIMEOUT )); do
     if [[ -f "$boot_log" ]] && grep -Fq 'NOVA_PHASE2_GUEST_PASS' "$boot_log"; then
+      if ! grep -Fq "NOVA_PHASE2_FIRMWARE=$mode" "$boot_log" ||
+         ! grep -Fq 'NOVA_PHASE2_ROOT_SOURCE=' "$boot_log" ||
+         ! grep -Fq 'NOVA_PHASE2_ROOT_FSTYPE=' "$boot_log"; then
+        echo "FAIL: installed guest firmware or root-filesystem evidence is missing/mismatched" >&2
+        printf 'mode=%s\nresult=FAIL\nstage=installed_boot_evidence\n' "$mode" > "$result"
+        return 1
+      fi
       if ! wait_qemu_exit 90 "$mode guest shutdown"; then
         printf 'mode=%s\nresult=FAIL\nstage=guest_shutdown_%s\n' "$mode" "$WAIT_REASON" > "$result"
         return 1

@@ -6,6 +6,7 @@ set -Eeuo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 ISO="$ROOT/os/debian-live/live-image-amd64.hybrid.iso"
 FIRMWARE="uefi"
+GRAPHICAL=false
 OUTPUT="$ROOT/os/debian-live/validation/installed"
 INSTALL_TIMEOUT=5400
 BOOT_TIMEOUT=1200
@@ -20,6 +21,7 @@ usage() {
 Usage: scripts/smoke-installed-iso-qemu.sh [options]
  --iso PATH               NOVA ISO (defaults to build output)
  --firmware uefi|bios|all  QEMU installation mode (default: uefi)
+ --graphical              Verify a real SDDM/Wayland/NOVA Desktop user session
  --output-dir DIR         Reports, logs and disposable qcow2 disks
  --install-timeout N      Installer seconds (default: 5400)
  --boot-timeout N         Installed-system seconds (default: 1200)
@@ -35,6 +37,7 @@ while (( $# )); do
   case "$1" in
     --iso) ISO="$2"; shift 2 ;;
     --firmware) FIRMWARE="$2"; shift 2 ;;
+    --graphical) GRAPHICAL=true; shift ;;
     --output-dir) OUTPUT="$2"; shift 2 ;;
     --install-timeout) INSTALL_TIMEOUT="$2"; shift 2 ;;
     --boot-timeout) BOOT_TIMEOUT="$2"; shift 2 ;;
@@ -47,7 +50,7 @@ for number in "$INSTALL_TIMEOUT" "$BOOT_TIMEOUT"; do
   [[ "$number" =~ ^[1-9][0-9]*$ ]] || fail "timeouts must be positive integers"
 done
 [[ -s "$ISO" && -s "$ISO.sha256" ]] || fail "ISO or checksum missing"
-for tool in "$QEMU" qemu-img xorriso sha256sum cpio gzip openssl timeout grep stat mktemp; do
+for tool in "$QEMU" qemu-img xorriso sha256sum cpio gzip openssl timeout grep stat mktemp python3; do
   command -v "$tool" >/dev/null || fail "missing dependency: $tool"
 done
 ( cd "$(dirname -- "$ISO")" && sha256sum -c "$(basename -- "$ISO.sha256")" ) || fail "ISO checksum mismatch"
@@ -90,6 +93,24 @@ echo "Installer boot assets: $INSTALLER and $INITRD"
 # Test-only password: ephemeral machine, no external accounts or production secrets.
 PASSWORD_HASH="$(openssl passwd -6 -salt nova-phase2-ci-2026 NOVA-QEMU-Disposable)"
 mkdir -p "$WORK/overlay"
+GRAPHICAL_LATE=""
+SERVICE_AFTER="local-fs.target systemd-user-sessions.service"
+SERVICE_WANTED="multi-user.target"
+SERVICE_TIMEOUT=180
+if [[ "$GRAPHICAL" == true ]]; then
+  # The only passwordless GUI login is inside a throwaway CI guest, never
+  # shipped in the NOVA ISO or installed onto any physical disk.
+  cat > "$WORK/overlay/nova-phase2-autologin.conf" <<'AUTOLOGIN'
+[Autologin]
+User=novatest
+Session=plasma.desktop
+Relogin=false
+AUTOLOGIN
+  GRAPHICAL_LATE='; mkdir -p /target/etc/sddm.conf.d; cp /nova-phase2-autologin.conf /target/etc/sddm.conf.d/zz-nova-phase2-ci-autologin.conf; touch /target/etc/nova-phase2-ci-graphical'
+  SERVICE_AFTER="local-fs.target systemd-user-sessions.service display-manager.service"
+  SERVICE_WANTED="graphical.target"
+  SERVICE_TIMEOUT=300
+fi
 cat > "$WORK/overlay/preseed.cfg" <<PRESEED
 d-i debian-installer/locale string en_US.UTF-8
 d-i keyboard-configuration/xkb-keymap select us
@@ -127,23 +148,23 @@ tasksel tasksel/first multiselect
 d-i grub-installer/only_debian boolean true
 d-i grub-installer/with_other_os boolean false
 d-i grub-installer/bootdev string /dev/vda
-d-i preseed/late_command string set -e; cp /nova-phase2-firstboot.sh /target/usr/local/sbin/nova-phase2-firstboot.sh; chmod 0700 /target/usr/local/sbin/nova-phase2-firstboot.sh; cp /nova-phase2-firstboot.service /target/etc/systemd/system/nova-phase2-firstboot.service; touch /target/etc/nova-phase2-ci-only; in-target systemctl enable nova-phase2-firstboot.service; mkdir -p /target/etc/default/grub.d; printf 'GRUB_CMDLINE_LINUX_DEFAULT="console=tty0 console=ttyS0,115200n8"\\n' > /target/etc/default/grub.d/nova-phase2-ci.cfg; in-target update-grub; test -s /target/boot/grub/grub.cfg; echo NOVA_PHASE2_INSTALL_COMPLETE >/dev/ttyS0
+d-i preseed/late_command string set -e; cp /nova-phase2-firstboot.sh /target/usr/local/sbin/nova-phase2-firstboot.sh; chmod 0700 /target/usr/local/sbin/nova-phase2-firstboot.sh; cp /nova-phase2-firstboot.service /target/etc/systemd/system/nova-phase2-firstboot.service; touch /target/etc/nova-phase2-ci-only; in-target systemctl enable nova-phase2-firstboot.service; mkdir -p /target/etc/default/grub.d; printf 'GRUB_CMDLINE_LINUX_DEFAULT="console=tty0 console=ttyS0,115200n8"\\n' > /target/etc/default/grub.d/nova-phase2-ci.cfg; in-target update-grub$GRAPHICAL_LATE; test -s /target/boot/grub/grub.cfg; echo NOVA_PHASE2_INSTALL_COMPLETE >/dev/ttyS0
 d-i finish-install/reboot_in_progress note
 # Do NOT request a kernel halt: QEMU's -no-reboot exits on the real installer
 # reboot, but a halted kernel can leave QEMU running indefinitely.
 d-i cdrom-detect/eject boolean false
 PRESEED
 install -m 0755 "$ROOT/scripts/phase2-firstboot.sh" "$WORK/overlay/nova-phase2-firstboot.sh"
-cat > "$WORK/overlay/nova-phase2-firstboot.service" <<'SERVICE'
+cat > "$WORK/overlay/nova-phase2-firstboot.service" <<SERVICE
 [Unit]
 Description=NOVA disposable VM first-boot acceptance
-After=local-fs.target systemd-user-sessions.service
+After=$SERVICE_AFTER
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/nova-phase2-firstboot.sh
-TimeoutStartSec=180
+TimeoutStartSec=$SERVICE_TIMEOUT
 [Install]
-WantedBy=multi-user.target
+WantedBy=$SERVICE_WANTED
 SERVICE
 
 # Appending an uncompressed cpio archive to an uncompressed initrd is supported
@@ -234,6 +255,33 @@ wait_qemu_exit() {
   return 1
 }
 
+# Capture the real virtual GPU framebuffer only after the user session has
+# passed the in-guest Wayland and NOVA Desktop process checks.
+capture_guest_screen() {
+  local socket_path="$1" screenshot="$2"
+  python3 - "$socket_path" "$screenshot" <<'PY'
+import pathlib
+import socket
+import sys
+import time
+
+sock_path, screenshot = sys.argv[1:]
+for attempt in range(25):
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(3)
+            sock.connect(sock_path)
+            sock.sendall(("screendump " + screenshot + "\\r\\n").encode())
+            time.sleep(2)
+        if pathlib.Path(screenshot).is_file() and pathlib.Path(screenshot).stat().st_size > 1024:
+            sys.exit(0)
+    except (OSError, TimeoutError):
+        pass
+    time.sleep(0.2)
+sys.exit("QEMU did not produce a graphical screen capture")
+PY
+}
+
 run_one() {
   local mode="$1"
   local disk="$OUTPUT/nova-$mode-ci.qcow2"
@@ -274,7 +322,15 @@ run_one() {
   fi
   # Shutdown by d-i is necessary but not sufficient; installed disk must boot.
   echo "Installer exited, now booting $mode virtual disk with ISO REMOVED"
-  "$QEMU" -machine q35 -accel "$ACCEL" -cpu max -m "$RAM_MIB" -smp "$CPUS" -vga std -display none \
+  local monitor_socket="" screenshot="$OUTPUT/$mode-graphical-session.ppm"
+  local screenshot_done=false
+  local graphics_args=(-vga std -display none)
+  if [[ "$GRAPHICAL" == true ]]; then
+    monitor_socket="$OUTPUT/$mode-graphical-monitor.sock"
+    graphics_args=(-vga virtio -display none -vnc 127.0.0.1:6
+                   -monitor "unix:$monitor_socket,server=on,wait=off")
+  fi
+  "$QEMU" -machine q35 -accel "$ACCEL" -cpu max -m "$RAM_MIB" -smp "$CPUS" "${graphics_args[@]}" \
     -serial "file:$boot_log" -no-reboot -boot order=c \
     -drive "if=virtio,format=qcow2,file=$disk" \
     -netdev user,id=net0 -device virtio-net-pci,netdev=net0 "${FW_ARGS[@]}" \
@@ -282,7 +338,22 @@ run_one() {
   QEMU_PID=$!
   local waited=0
   while (( waited < BOOT_TIMEOUT )); do
+    if [[ "$GRAPHICAL" == true && "$screenshot_done" == false &&
+          -f "$boot_log" ]] &&
+       grep -Fq 'NOVA_PHASE2_GRAPHICAL_SESSION_OK' "$boot_log"; then
+      if ! capture_guest_screen "$monitor_socket" "$screenshot"; then
+        echo "FAIL: real graphical session screenshot not captured" >&2
+        printf 'mode=%s\\nresult=FAIL\\nstage=graphical_screenshot\\n' "$mode" > "$result"
+        return 1
+      fi
+      screenshot_done=true
+    fi
     if [[ -f "$boot_log" ]] && grep -Fq 'NOVA_PHASE2_GUEST_PASS' "$boot_log"; then
+      if [[ "$GRAPHICAL" == true && "$screenshot_done" != true ]]; then
+        echo "FAIL: no verified graphical session screenshot" >&2
+        printf 'mode=%s\\nresult=FAIL\\nstage=graphical_evidence\\n' "$mode" > "$result"
+        return 1
+      fi
       if ! grep -Fq "NOVA_PHASE2_FIRMWARE=$mode" "$boot_log" ||
          ! grep -Fq 'NOVA_PHASE2_ROOT_SOURCE=' "$boot_log" ||
          ! grep -Fq 'NOVA_PHASE2_ROOT_FSTYPE=' "$boot_log"; then
@@ -295,7 +366,7 @@ run_one() {
         return 1
       fi
       echo "PASS: $mode installed NOVA booted without ISO, passed guest checks and shut down cleanly"
-      printf 'mode=%s\nresult=PASS\npostinstall=verified\nshutdown=verified\n' "$mode" > "$result"
+      printf 'mode=%s\nresult=PASS\npostinstall=verified\nshutdown=verified\ngraphical=%s\n' "$mode" "$GRAPHICAL" > "$result"
       return 0
     fi
     if [[ -f "$boot_log" ]] && grep -Fq 'NOVA_PHASE2_GUEST_FAIL' "$boot_log"; then

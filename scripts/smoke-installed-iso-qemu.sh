@@ -96,6 +96,8 @@ d-i keyboard-configuration/xkb-keymap select us
 d-i netcfg/choose_interface select auto
 d-i netcfg/get_hostname string nova-phase2
 d-i netcfg/get_domain string local
+# Proof that Debian Installer actually read the CI-only preseed.
+d-i preseed/early_command string echo NOVA_PHASE2_PRESEED_LOADED >/dev/ttyS0
 d-i mirror/country string manual
 d-i mirror/http/hostname string deb.debian.org
 d-i mirror/http/directory string /debian
@@ -186,16 +188,35 @@ boot_firmware_args() {
 
 wait_qemu_exit() {
   local limit="$1" label="$2"
-  local waited=0
+  local waited=0 code=0
+  WAIT_REASON=""
   while (( waited < limit )); do
     if ! kill -0 "$QEMU_PID" 2>/dev/null; then
-      wait "$QEMU_PID" || true
+      wait "$QEMU_PID" || code=$?
       QEMU_PID=""
+      if (( code != 0 )); then
+        WAIT_REASON="qemu_exit_$code"
+        echo "FAIL: $label QEMU exited with status $code" >&2
+        return 1
+      fi
       return 0
+    fi
+    # A textual d-i main-menu prompt proves the unattended install is blocked.
+    # Fail quickly, preserving the serial log, instead of burning 90 CI minutes.
+    if [[ -n "${WATCH_INSTALL_LOG:-}" && -f "$WATCH_INSTALL_LOG" ]] &&
+       grep -Fq "Prompt: '?' for help" "$WATCH_INSTALL_LOG"; then
+      WAIT_REASON="interactive_prompt"
+      echo "FAIL: $label requires interactive input despite CI-only preseed" >&2
+      tail -n 60 "$WATCH_INSTALL_LOG" >&2 || true
+      kill "$QEMU_PID" 2>/dev/null || true
+      wait "$QEMU_PID" 2>/dev/null || true
+      QEMU_PID=""
+      return 1
     fi
     sleep 5
     waited=$((waited + 5))
   done
+  WAIT_REASON="timeout"
   echo "TIMEOUT: $label after $limit seconds" >&2
   kill "$QEMU_PID" 2>/dev/null || true
   wait "$QEMU_PID" 2>/dev/null || true
@@ -224,10 +245,13 @@ run_one() {
     -append "auto=true auto-install/enable=true preseed/file=/preseed.cfg priority=critical console=ttyS0,115200n8 DEBIAN_FRONTEND=noninteractive netcfg/choose_interface=auto" \
     > "$OUTPUT/$mode-installer-qemu.log" 2>&1 &
   QEMU_PID=$!
+  WATCH_INSTALL_LOG="$install_log"
   if ! wait_qemu_exit "$INSTALL_TIMEOUT" "$mode installer"; then
-    printf 'mode=%s\nresult=FAIL\nstage=installer_timeout\n' "$mode" > "$result"
+    printf 'mode=%s\nresult=FAIL\nstage=installer_%s\n' "$mode" "$WAIT_REASON" > "$result"
+    WATCH_INSTALL_LOG=""
     return 1
   fi
+  WATCH_INSTALL_LOG=""
   # Shutdown by d-i is necessary but not sufficient; installed disk must boot.
   echo "Installer exited, now booting $mode virtual disk with ISO REMOVED"
   "$QEMU" -machine q35 -accel "$ACCEL" -cpu max -m "$RAM_MIB" -smp "$CPUS" -vga std -display none \
@@ -239,9 +263,12 @@ run_one() {
   local waited=0
   while (( waited < BOOT_TIMEOUT )); do
     if [[ -f "$boot_log" ]] && grep -Fq 'NOVA_PHASE2_GUEST_PASS' "$boot_log"; then
-      echo "PASS: $mode installed NOVA booted without ISO and verified desktop packages + daemon"
-      printf 'mode=%s\nresult=PASS\npostinstall=verified\n' "$mode" > "$result"
-      wait_qemu_exit 90 "$mode guest shutdown" || true
+      if ! wait_qemu_exit 90 "$mode guest shutdown"; then
+        printf 'mode=%s\nresult=FAIL\nstage=guest_shutdown_%s\n' "$mode" "$WAIT_REASON" > "$result"
+        return 1
+      fi
+      echo "PASS: $mode installed NOVA booted without ISO, passed guest checks and shut down cleanly"
+      printf 'mode=%s\nresult=PASS\npostinstall=verified\nshutdown=verified\n' "$mode" > "$result"
       return 0
     fi
     if [[ -f "$boot_log" ]] && grep -Fq 'NOVA_PHASE2_GUEST_FAIL' "$boot_log"; then

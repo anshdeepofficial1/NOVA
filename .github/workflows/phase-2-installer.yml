@@ -29,7 +29,7 @@ permissions:
 
 concurrency:
   group: nova-phase-2-installer-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   install-from-iso:
@@ -88,6 +88,15 @@ jobs:
             --output-dir "$RUNNER_TEMP/nova-installed" \
             --install-timeout 5400 \
             --boot-timeout 1200
+      - name: Validate actual Btrfs root subvolume after UEFI installation
+        run: |
+          sudo bash scripts/smoke-installed-iso-qemu.sh \
+            --iso "$NOVA_ISO" \
+            --firmware uefi \
+            --filesystem btrfs \
+            --output-dir "$RUNNER_TEMP/nova-installed-btrfs" \
+            --install-timeout 5400 \
+            --boot-timeout 1200
       - name: Upload installation and first-boot diagnostics
         if: always()
         uses: actions/upload-artifact@v7
@@ -96,5 +105,7 @@ jobs:
           path: |
             ${{ runner.temp }}/nova-installed/*.log
             ${{ runner.temp }}/nova-installed/*-result.txt
+            ${{ runner.temp }}/nova-installed-btrfs/*.log
+            ${{ runner.temp }}/nova-installed-btrfs/*-result.txt
           if-no-files-found: warn
           retention-days: 14

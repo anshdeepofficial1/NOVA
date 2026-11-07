@@ -66,22 +66,25 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Locate the real Debian Installer kernel/initrd, not the live-session kernel.
-# A missing live-installer is an immediate test failure.
+# Locate actual Debian Installer assets by extraction, not by treating
+# xorriso's ISO tree API as the unrelated Unix find(1) command.
 INSTALLER=""
 for candidate in /install/vmlinuz /install/gtk/vmlinuz; do
   initrd="${candidate%/*}/initrd.gz"
-  if xorriso -indev "$ISO" -find "$candidate" -type f -print 2>/dev/null | grep -Fqx "$candidate" &&
-     xorriso -indev "$ISO" -find "$initrd" -type f -print 2>/dev/null | grep -Fqx "$initrd"; then
+  rm -f "$WORK/vmlinuz" "$WORK/original-initrd.gz"
+  if xorriso -osirrox on -indev "$ISO" -extract "$candidate" "$WORK/vmlinuz" >/dev/null 2>&1 &&
+     xorriso -osirrox on -indev "$ISO" -extract "$initrd" "$WORK/original-initrd.gz" >/dev/null 2>&1 &&
+     [[ -s "$WORK/vmlinuz" && -s "$WORK/original-initrd.gz" ]]; then
     INSTALLER="$candidate"
     INITRD="$initrd"
     break
   fi
 done
-[[ -n "$INSTALLER" ]] || fail "ISO has no /install debian-installer kernel + initrd"
-xorriso -osirrox on -indev "$ISO" -extract "$INSTALLER" "$WORK/vmlinuz" >/dev/null 2>&1
-xorriso -osirrox on -indev "$ISO" -extract "$INITRD" "$WORK/original-initrd.gz" >/dev/null 2>&1
-[[ -s "$WORK/vmlinuz" && -s "$WORK/original-initrd.gz" ]] || fail "installer extraction was empty"
+if [[ -z "$INSTALLER" ]]; then
+  echo "Actual /install files found in the ISO:" >&2
+  xorriso -indev "$ISO" -ls /install 2>&1 | tail -n 80 >&2 || true
+  fail "ISO has no extractable debian-installer kernel + initrd"
+fi
 echo "Installer boot assets: $INSTALLER and $INITRD"
 
 # Test-only password: ephemeral machine, no external accounts or production secrets.

@@ -3,11 +3,14 @@
 use std::{
     io::{Read, Write},
     net::{SocketAddr, TcpStream},
+    sync::Mutex,
     time::{Duration, Instant},
 };
 
 use tauri::Manager;
-use tauri_plugin_shell::{process::CommandEvent, ShellExt};
+use tauri_plugin_shell::{process::{CommandChild, CommandEvent}, ShellExt};
+
+struct ManagedSidecar(Mutex<Option<CommandChild>>);
 
 /// Check whether NOVA's user-session service is already running.
 ///
@@ -90,10 +93,9 @@ fn main() {
 
                     match command.spawn() {
                         Ok((mut events, child)) => {
-                            // CommandChild is retained by the app. Because
-                            // kill_on_drop is enabled, app shutdown terminates
-                            // the process group instead of orphaning the daemon.
-                            app.manage(child);
+                            // Keep ownership so the Exit event can explicitly
+                            // kill and reap the full process group.
+                            app.manage(ManagedSidecar(Mutex::new(Some(child))));
 
                             tauri::async_runtime::spawn(async move {
                                 while let Some(event) = events.recv().await {
@@ -125,10 +127,25 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("failed to build NOVA Desktop");
 
-    app.run(|_app_handle, event| {
+    app.run(|app_handle, event| {
         if let tauri::RunEvent::Exit = event {
-            // The managed CommandChild is dropped with app state; kill_on_drop
-            // and process-group cleanup prevent an orphaned local service.
+            // App state can outlive this callback. Take ownership and
+            // synchronously stop/reap the process group before returning.
+            let child = app_handle.try_state::<ManagedSidecar>().and_then(|state| {
+                match state.0.lock() {
+                    Ok(mut child) => child.take(),
+                    Err(error) => {
+                        eprintln!("Could not lock NOVA sidecar state during shutdown: {error}");
+                        None
+                    }
+                }
+            });
+
+            if let Some(child) = child {
+                if let Err(error) = child.kill() {
+                    eprintln!("Could not stop NOVA host service during desktop shutdown: {error}");
+                }
+            }
         }
     });
 }

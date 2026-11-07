@@ -150,8 +150,254 @@ gzip -dc "$WORK/original-initrd.gz" > "$WORK/initrd.raw"
 # GNU cpio stops at the first archive trailer, so verify the injected archive
 # separately before concatenating it to the original Debian Installer initrd.
 overlay_entries="$(cpio -it --quiet < "$WORK/ci-overlay.cpio")"
-grep -Fxq './preseed.cfg' <<< "$overlay_entries" || fail "CI preseed missing from overlay"
-grep -Fxq './nova-phase2-firstboot.sh' <<< "$overlay_entries" || fail "CI guest probe missing from overlay"
+echo "CI installer overlay file list:"
+printf '%s\n' "$overlay_entries"
+grep -Eq '(^|/)preseed\\.cfg
+cat "$WORK/ci-overlay.cpio" >> "$WORK/initrd.raw"
+gzip -1 -c "$WORK/initrd.raw" > "$WORK/test-initrd.gz"
+[[ -s "$WORK/test-initrd.gz" ]] || fail "could not generate CI installer initrd"
+
+ACCEL="tcg,thread=multi"
+if [[ -r /dev/kvm && -w /dev/kvm ]]; then ACCEL="kvm"; fi
+echo "QEMU acceleration: $ACCEL"
+echo "All target disks will be newly created qcow2 images inside $OUTPUT"
+
+boot_firmware_args() {
+  local mode="$1"
+  FW_ARGS=()
+  FW_VARS=""
+  if [[ "$mode" == "uefi" ]]; then
+    local code="" vars=""
+    for prefix in "OVMF_CODE_4M" "OVMF_CODE"; do
+      if [[ -s "$OVMF_DIR/${prefix}.fd" ]]; then
+        code="$OVMF_DIR/${prefix}.fd"
+        if [[ "$prefix" == *4M ]]; then vars="$OVMF_DIR/OVMF_VARS_4M.fd"; else vars="$OVMF_DIR/OVMF_VARS.fd"; fi
+        [[ -s "$vars" ]] && break
+      fi
+    done
+    [[ -s "$code" && -s "$vars" ]] || fail "UEFI firmware pair not found"
+    FW_VARS="$WORK/ovmf-$mode-vars.fd"
+    cp "$vars" "$FW_VARS"
+    FW_ARGS=(-drive "if=pflash,format=raw,unit=0,readonly=on,file=$code"
+             -drive "if=pflash,format=raw,unit=1,file=$FW_VARS")
+  fi
+}
+
+wait_qemu_exit() {
+  local limit="$1" label="$2"
+  local waited=0
+  while (( waited < limit )); do
+    if ! kill -0 "$QEMU_PID" 2>/dev/null; then
+      wait "$QEMU_PID" || true
+      QEMU_PID=""
+      return 0
+    fi
+    sleep 5
+    waited=$((waited + 5))
+  done
+  echo "TIMEOUT: $label after $limit seconds" >&2
+  kill "$QEMU_PID" 2>/dev/null || true
+  wait "$QEMU_PID" 2>/dev/null || true
+  QEMU_PID=""
+  return 1
+}
+
+run_one() {
+  local mode="$1"
+  local disk="$OUTPUT/nova-$mode-ci.qcow2"
+  local install_log="$OUTPUT/$mode-installer-serial.log"
+  local boot_log="$OUTPUT/$mode-installed-serial.log"
+  local result="$OUTPUT/$mode-result.txt"
+  rm -f "$result"
+  # Reject existing files rather than reuse (or overwrite) a disk.
+  [[ ! -e "$disk" ]] || fail "refusing to overwrite existing disk: $disk"
+  qemu-img create -f qcow2 "$disk" "${DISK_GIB}G" >/dev/null
+  [[ "$(qemu-img info --output=json "$disk" | python3 -c 'import json,sys; print(json.load(sys.stdin)["format"])')" == qcow2 ]] || fail "invalid generated disk format"
+  boot_firmware_args "$mode"
+  echo "Starting $mode Debian live-installer on a fresh disposable disk"
+  "$QEMU" -machine q35 -accel "$ACCEL" -cpu max -m "$RAM_MIB" -smp "$CPUS" -vga std -display none \
+    -serial "file:$install_log" -no-reboot \
+    -drive "if=virtio,format=qcow2,file=$disk" \
+    -cdrom "$ISO" -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
+    "${FW_ARGS[@]}" -kernel "$WORK/vmlinuz" -initrd "$WORK/test-initrd.gz" \
+    -append "auto=true priority=critical console=ttyS0,115200n8 DEBIAN_FRONTEND=text netcfg/choose_interface=auto" \
+    > "$OUTPUT/$mode-installer-qemu.log" 2>&1 &
+  QEMU_PID=$!
+  if ! wait_qemu_exit "$INSTALL_TIMEOUT" "$mode installer"; then
+    printf 'mode=%s\nresult=FAIL\nstage=installer_timeout\n' "$mode" > "$result"
+    return 1
+  fi
+  # Shutdown by d-i is necessary but not sufficient; installed disk must boot.
+  echo "Installer exited, now booting $mode virtual disk with ISO REMOVED"
+  "$QEMU" -machine q35 -accel "$ACCEL" -cpu max -m "$RAM_MIB" -smp "$CPUS" -vga std -display none \
+    -serial "file:$boot_log" -no-reboot -boot order=c \
+    -drive "if=virtio,format=qcow2,file=$disk" \
+    -netdev user,id=net0 -device virtio-net-pci,netdev=net0 "${FW_ARGS[@]}" \
+    > "$OUTPUT/$mode-installed-qemu.log" 2>&1 &
+  QEMU_PID=$!
+  local waited=0
+  while (( waited < BOOT_TIMEOUT )); do
+    if [[ -f "$boot_log" ]] && grep -Fq 'NOVA_PHASE2_GUEST_PASS' "$boot_log"; then
+      echo "PASS: $mode installed NOVA booted without ISO and verified desktop packages + daemon"
+      printf 'mode=%s\nresult=PASS\npostinstall=verified\n' "$mode" > "$result"
+      wait_qemu_exit 90 "$mode guest shutdown" || true
+      return 0
+    fi
+    if [[ -f "$boot_log" ]] && grep -Fq 'NOVA_PHASE2_GUEST_FAIL' "$boot_log"; then
+      echo "Guest acceptance failure:" >&2
+      tail -n 60 "$boot_log" >&2
+      printf 'mode=%s\nresult=FAIL\nstage=first_boot_checks\n' "$mode" > "$result"
+      return 1
+    fi
+    if ! kill -0 "$QEMU_PID" 2>/dev/null; then
+      wait "$QEMU_PID" 2>/dev/null || true
+      QEMU_PID=""
+      echo "Installed $mode guest stopped before acceptance" >&2
+      [[ ! -f "$boot_log" ]] || tail -n 80 "$boot_log" >&2
+      printf 'mode=%s\nresult=FAIL\nstage=early_shutdown\n' "$mode" > "$result"
+      return 1
+    fi
+    sleep 5
+    waited=$((waited+5))
+  done
+  echo "Installed $mode boot timed out" >&2
+  [[ ! -f "$boot_log" ]] || tail -n 80 "$boot_log" >&2
+  printf 'mode=%s\nresult=FAIL\nstage=boot_timeout\n' "$mode" > "$result"
+  return 1
+}
+
+modes=("$FIRMWARE")
+if [[ "$FIRMWARE" == "all" ]]; then modes=(uefi bios); fi
+failed=0
+for mode in "${modes[@]}"; do
+  if ! run_one "$mode"; then failed=$((failed+1)); fi
+done
+if (( failed > 0 )); then fail "$failed/${#modes[@]} installer and first-boot paths failed"; fi
+echo "NOVA Phase 2 disposable installer smoke PASS (${modes[*]})"
+ <<< "$overlay_entries" || fail "CI preseed missing from overlay"
+grep -Eq '(^|/)nova-phase2-firstboot\\.sh
+cat "$WORK/ci-overlay.cpio" >> "$WORK/initrd.raw"
+gzip -1 -c "$WORK/initrd.raw" > "$WORK/test-initrd.gz"
+[[ -s "$WORK/test-initrd.gz" ]] || fail "could not generate CI installer initrd"
+
+ACCEL="tcg,thread=multi"
+if [[ -r /dev/kvm && -w /dev/kvm ]]; then ACCEL="kvm"; fi
+echo "QEMU acceleration: $ACCEL"
+echo "All target disks will be newly created qcow2 images inside $OUTPUT"
+
+boot_firmware_args() {
+  local mode="$1"
+  FW_ARGS=()
+  FW_VARS=""
+  if [[ "$mode" == "uefi" ]]; then
+    local code="" vars=""
+    for prefix in "OVMF_CODE_4M" "OVMF_CODE"; do
+      if [[ -s "$OVMF_DIR/${prefix}.fd" ]]; then
+        code="$OVMF_DIR/${prefix}.fd"
+        if [[ "$prefix" == *4M ]]; then vars="$OVMF_DIR/OVMF_VARS_4M.fd"; else vars="$OVMF_DIR/OVMF_VARS.fd"; fi
+        [[ -s "$vars" ]] && break
+      fi
+    done
+    [[ -s "$code" && -s "$vars" ]] || fail "UEFI firmware pair not found"
+    FW_VARS="$WORK/ovmf-$mode-vars.fd"
+    cp "$vars" "$FW_VARS"
+    FW_ARGS=(-drive "if=pflash,format=raw,unit=0,readonly=on,file=$code"
+             -drive "if=pflash,format=raw,unit=1,file=$FW_VARS")
+  fi
+}
+
+wait_qemu_exit() {
+  local limit="$1" label="$2"
+  local waited=0
+  while (( waited < limit )); do
+    if ! kill -0 "$QEMU_PID" 2>/dev/null; then
+      wait "$QEMU_PID" || true
+      QEMU_PID=""
+      return 0
+    fi
+    sleep 5
+    waited=$((waited + 5))
+  done
+  echo "TIMEOUT: $label after $limit seconds" >&2
+  kill "$QEMU_PID" 2>/dev/null || true
+  wait "$QEMU_PID" 2>/dev/null || true
+  QEMU_PID=""
+  return 1
+}
+
+run_one() {
+  local mode="$1"
+  local disk="$OUTPUT/nova-$mode-ci.qcow2"
+  local install_log="$OUTPUT/$mode-installer-serial.log"
+  local boot_log="$OUTPUT/$mode-installed-serial.log"
+  local result="$OUTPUT/$mode-result.txt"
+  rm -f "$result"
+  # Reject existing files rather than reuse (or overwrite) a disk.
+  [[ ! -e "$disk" ]] || fail "refusing to overwrite existing disk: $disk"
+  qemu-img create -f qcow2 "$disk" "${DISK_GIB}G" >/dev/null
+  [[ "$(qemu-img info --output=json "$disk" | python3 -c 'import json,sys; print(json.load(sys.stdin)["format"])')" == qcow2 ]] || fail "invalid generated disk format"
+  boot_firmware_args "$mode"
+  echo "Starting $mode Debian live-installer on a fresh disposable disk"
+  "$QEMU" -machine q35 -accel "$ACCEL" -cpu max -m "$RAM_MIB" -smp "$CPUS" -vga std -display none \
+    -serial "file:$install_log" -no-reboot \
+    -drive "if=virtio,format=qcow2,file=$disk" \
+    -cdrom "$ISO" -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
+    "${FW_ARGS[@]}" -kernel "$WORK/vmlinuz" -initrd "$WORK/test-initrd.gz" \
+    -append "auto=true priority=critical console=ttyS0,115200n8 DEBIAN_FRONTEND=text netcfg/choose_interface=auto" \
+    > "$OUTPUT/$mode-installer-qemu.log" 2>&1 &
+  QEMU_PID=$!
+  if ! wait_qemu_exit "$INSTALL_TIMEOUT" "$mode installer"; then
+    printf 'mode=%s\nresult=FAIL\nstage=installer_timeout\n' "$mode" > "$result"
+    return 1
+  fi
+  # Shutdown by d-i is necessary but not sufficient; installed disk must boot.
+  echo "Installer exited, now booting $mode virtual disk with ISO REMOVED"
+  "$QEMU" -machine q35 -accel "$ACCEL" -cpu max -m "$RAM_MIB" -smp "$CPUS" -vga std -display none \
+    -serial "file:$boot_log" -no-reboot -boot order=c \
+    -drive "if=virtio,format=qcow2,file=$disk" \
+    -netdev user,id=net0 -device virtio-net-pci,netdev=net0 "${FW_ARGS[@]}" \
+    > "$OUTPUT/$mode-installed-qemu.log" 2>&1 &
+  QEMU_PID=$!
+  local waited=0
+  while (( waited < BOOT_TIMEOUT )); do
+    if [[ -f "$boot_log" ]] && grep -Fq 'NOVA_PHASE2_GUEST_PASS' "$boot_log"; then
+      echo "PASS: $mode installed NOVA booted without ISO and verified desktop packages + daemon"
+      printf 'mode=%s\nresult=PASS\npostinstall=verified\n' "$mode" > "$result"
+      wait_qemu_exit 90 "$mode guest shutdown" || true
+      return 0
+    fi
+    if [[ -f "$boot_log" ]] && grep -Fq 'NOVA_PHASE2_GUEST_FAIL' "$boot_log"; then
+      echo "Guest acceptance failure:" >&2
+      tail -n 60 "$boot_log" >&2
+      printf 'mode=%s\nresult=FAIL\nstage=first_boot_checks\n' "$mode" > "$result"
+      return 1
+    fi
+    if ! kill -0 "$QEMU_PID" 2>/dev/null; then
+      wait "$QEMU_PID" 2>/dev/null || true
+      QEMU_PID=""
+      echo "Installed $mode guest stopped before acceptance" >&2
+      [[ ! -f "$boot_log" ]] || tail -n 80 "$boot_log" >&2
+      printf 'mode=%s\nresult=FAIL\nstage=early_shutdown\n' "$mode" > "$result"
+      return 1
+    fi
+    sleep 5
+    waited=$((waited+5))
+  done
+  echo "Installed $mode boot timed out" >&2
+  [[ ! -f "$boot_log" ]] || tail -n 80 "$boot_log" >&2
+  printf 'mode=%s\nresult=FAIL\nstage=boot_timeout\n' "$mode" > "$result"
+  return 1
+}
+
+modes=("$FIRMWARE")
+if [[ "$FIRMWARE" == "all" ]]; then modes=(uefi bios); fi
+failed=0
+for mode in "${modes[@]}"; do
+  if ! run_one "$mode"; then failed=$((failed+1)); fi
+done
+if (( failed > 0 )); then fail "$failed/${#modes[@]} installer and first-boot paths failed"; fi
+echo "NOVA Phase 2 disposable installer smoke PASS (${modes[*]})"
+ <<< "$overlay_entries" || fail "CI guest probe missing from overlay"
 cat "$WORK/ci-overlay.cpio" >> "$WORK/initrd.raw"
 gzip -1 -c "$WORK/initrd.raw" > "$WORK/test-initrd.gz"
 [[ -s "$WORK/test-initrd.gz" ]] || fail "could not generate CI installer initrd"

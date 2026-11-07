@@ -17,7 +17,7 @@ on:
           - bios
           - all
   push:
-    branches: [main]
+    branches: [main, "work/**"]
     paths:
       - "scripts/smoke-installed-iso-qemu.sh"
       - "scripts/phase2-firstboot.sh"
@@ -28,7 +28,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: nova-phase-2-installer
+  group: nova-phase-2-installer-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

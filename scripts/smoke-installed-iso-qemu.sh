@@ -117,7 +117,7 @@ d-i partman-auto/choose_recipe select atomic
 d-i partman-partitioning/choose_label select gpt
 d-i partman-partitioning/default_label string gpt
 d-i partman/confirm_write_new_label boolean true
-d-i partman/choose_partition select Finish partitioning and write changes to disk
+d-i partman/choose_partition select finish
 d-i partman/confirm boolean true
 d-i partman/confirm_nooverwrite boolean true
 d-i partman-basicfilesystems/no_swap boolean false

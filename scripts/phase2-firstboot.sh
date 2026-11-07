@@ -31,7 +31,28 @@ assert_package() {
 
 # These checks are against the installed OS. There is no ISO attached to this VM.
 grep -Fq 'ID=debian' /etc/os-release
-test "$(findmnt -n -o SOURCE /)" != "/dev/loop0"
+# Inspect the installed disk, not the removed live ISO or an ephemeral rootfs.
+root_source="$(findmnt -n -o SOURCE /)"
+root_fstype="$(findmnt -n -o FSTYPE /)"
+case "$root_source" in
+  /dev/*|UUID=*) ;;
+  *) echo "Unexpected root source: $root_source"; exit 1 ;;
+esac
+case "$root_fstype" in
+  ext4|btrfs|xfs) ;;
+  *) echo "Unexpected root filesystem: $root_fstype"; exit 1 ;;
+esac
+test -s /etc/fstab
+test -s /boot/grub/grub.cfg
+if [[ -d /sys/firmware/efi ]]; then
+  firmware=uefi
+  test -d /boot/efi/EFI
+else
+  firmware=bios
+fi
+echo "NOVA_PHASE2_ROOT_SOURCE=$root_source"
+echo "NOVA_PHASE2_ROOT_FSTYPE=$root_fstype"
+echo "NOVA_PHASE2_FIRMWARE=$firmware"
 test -d /home/novatest
 test -x /usr/local/bin/nova-daemon
 assert_binary nova-shell

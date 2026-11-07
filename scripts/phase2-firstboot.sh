@@ -70,6 +70,28 @@ test -f /usr/lib/systemd/user/nova-daemon.service
 test -f /etc/xdg/autostart/nova-desktop.desktop
 test -f /etc/nova-phase2-ci-only
 
+# If this installed image carries the production initializer, prove that its
+# systemd unit actually executed. Legacy ISO artifacts used for earlier installer
+# regression tests lack the unit and cannot satisfy this newer release gate.
+if [[ -f /usr/lib/systemd/system/nova-firstboot.service ]]; then
+  systemctl is-enabled nova-firstboot.service >/dev/null
+  ready=0
+  for attempt in $(seq 1 60); do
+    if [[ -s /var/lib/nova/firstboot.ready ]]; then
+      ready=1
+      break
+    fi
+    sleep 1
+  done
+  if (( ready != 1 )); then
+    echo "Production NOVA first-boot service did not write its installed-system marker"
+    journalctl --no-pager -u nova-firstboot.service -n 50 || true
+    exit 1
+  fi
+  grep -Fxq 'status=prerequisites_checked' /var/lib/nova/firstboot.ready
+  echo "NOVA_PHASE2_PRODUCTION_FIRSTBOOT_OK"
+fi
+
 echo "NOVA_PHASE2_FILESYSTEM_OK"
 echo "NOVA_PHASE2_DESKTOP_PACKAGES_OK"
 

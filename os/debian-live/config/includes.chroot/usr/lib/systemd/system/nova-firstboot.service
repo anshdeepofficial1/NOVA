@@ -1,0 +1,27 @@
+[Unit]
+Description=NOVA installed-system first-boot initialization
+Documentation=https://github.com/anshdeepofficial1/NOVA
+After=local-fs.target systemd-remount-fs.service
+Before=display-manager.service
+ConditionPathExists=!/run/live/medium
+ConditionPathExists=!/var/lib/nova/firstboot.ready
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/nova-firstboot-init
+StateDirectory=nova
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/var/lib/nova
+TimeoutStartSec=45
+
+[Install]
+WantedBy=multi-user.target

@@ -22,6 +22,12 @@ on:
       - "scripts/smoke-installed-iso-qemu.sh"
       - "scripts/phase2-firstboot.sh"
       - ".github/workflows/phase-2-installer.yml"
+  # Re-run the installed-system acceptance against every successfully rebuilt ISO,
+  # not only when its VM harness changes.
+  workflow_run:
+    workflows: ["Build NOVA ISO"]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
@@ -29,11 +35,12 @@ permissions:
 
 concurrency:
   group: nova-phase-2-installer-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   install-from-iso:
     name: Install ISO onto blank qcow2 and reboot without ISO
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     steps:
@@ -55,7 +62,7 @@ jobs:
         id: source
         env:
           GH_TOKEN: ${{ github.token }}
-          REQUESTED_RUN: ${{ inputs.iso_run_id }}
+          REQUESTED_RUN: ${{ inputs.iso_run_id || github.event.workflow_run.id || '' }}
         run: |
           if [[ -n "$REQUESTED_RUN" ]]; then
             run="$REQUESTED_RUN"

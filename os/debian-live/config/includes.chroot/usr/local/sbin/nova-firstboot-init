@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# First-boot initialization of an INSTALLED NOVA OS, never the live medium.
+# No partitioning, account modification, key rotation or network access.
+set -Eeuo pipefail
+
+log() { printf 'NOVA_FIRSTBOOT: %s\n' "$*"; }
+fail() { log "FAIL: $*"; exit 1; }
+
+[[ "$(id -u)" == 0 ]] || fail "must run as root through systemd"
+
+# Never stamp or mutate the live ISO's overlay. A live system is NOT installed.
+if grep -Eq '(^|[[:space:]])boot=live([[:space:]]|$)' /proc/cmdline ||
+   [[ -e /run/live/medium ]]; then
+  log "skipping live medium"
+  exit 0
+fi
+
+state_dir=/var/lib/nova
+stamp="$state_dir/firstboot.ready"
+[[ ! -e "$stamp" ]] || { log "already initialized"; exit 0; }
+
+# An installed on-disk root and bootloader are mandatory. Never initialize
+# an overlay, initramfs, RAM-only or installer environment as an installed OS.
+root_source="$(findmnt -n -o SOURCE /)"
+case "$root_source" in
+  /dev/*|UUID=*) ;;
+  *) fail "not an installed disk-backed root: $root_source" ;;
+esac
+
+[[ -s /etc/os-release ]] || fail "missing OS identity"
+. /etc/os-release
+[[ "${ID:-}" == "debian" ]] || fail "unexpected base OS"
+[[ -s /etc/machine-id ]] || fail "machine ID not initialized"
+[[ -s /etc/fstab ]] || fail "missing installed filesystem table"
+[[ -s /boot/grub/grub.cfg ]] || fail "missing installed GRUB configuration"
+[[ -x /usr/local/bin/nova-daemon ]] || fail "missing NOVA daemon"
+command -v nova-shell >/dev/null || fail "missing NOVA desktop executable"
+[[ -s /usr/lib/systemd/user/nova-daemon.service ]] || fail "missing NOVA user service"
+[[ -s /etc/xdg/autostart/nova-desktop.desktop ]] || fail "missing NOVA autostart"
+command -v nmcli >/dev/null || fail "missing NetworkManager client"
+
+# Only record completion after all installed-system prerequisites pass. This
+# file is not a substitute for graphical login, health or hardware acceptance.
+install -d -m 0700 "$state_dir"
+temporary="$(mktemp "$state_dir/.firstboot.XXXXXX")"
+trap 'rm -f -- "$temporary"' EXIT
+{
+  printf 'schema=1\n'
+  printf 'base=debian\n'
+  printf 'root_fstype=%s\n' "$(findmnt -n -o FSTYPE /)"
+  printf 'status=prerequisites_checked\n'
+} > "$temporary"
+chmod 0600 "$temporary"
+mv -f -- "$temporary" "$stamp"
+trap - EXIT
+log "NOVA_FIRSTBOOT_INSTALLED_READY"

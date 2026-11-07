@@ -6,6 +6,7 @@ set -Eeuo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 ISO="$ROOT/os/debian-live/live-image-amd64.hybrid.iso"
 FIRMWARE="uefi"
+FILESYSTEM="ext4"
 OUTPUT="$ROOT/os/debian-live/validation/installed"
 INSTALL_TIMEOUT=5400
 BOOT_TIMEOUT=1200
@@ -20,6 +21,7 @@ usage() {
 Usage: scripts/smoke-installed-iso-qemu.sh [options]
  --iso PATH               NOVA ISO (defaults to build output)
  --firmware uefi|bios|all  QEMU installation mode (default: uefi)
+ --filesystem ext4|btrfs  Test-only installed root filesystem (default: ext4)
  --output-dir DIR         Reports, logs and disposable qcow2 disks
  --install-timeout N      Installer seconds (default: 5400)
  --boot-timeout N         Installed-system seconds (default: 1200)
@@ -35,6 +37,7 @@ while (( $# )); do
   case "$1" in
     --iso) ISO="$2"; shift 2 ;;
     --firmware) FIRMWARE="$2"; shift 2 ;;
+    --filesystem) FILESYSTEM="$2"; shift 2 ;;
     --output-dir) OUTPUT="$2"; shift 2 ;;
     --install-timeout) INSTALL_TIMEOUT="$2"; shift 2 ;;
     --boot-timeout) BOOT_TIMEOUT="$2"; shift 2 ;;
@@ -43,6 +46,7 @@ while (( $# )); do
   esac
 done
 [[ "$FIRMWARE" == "uefi" || "$FIRMWARE" == "bios" || "$FIRMWARE" == "all" ]] || fail "invalid firmware"
+[[ "$FILESYSTEM" == "ext4" || "$FILESYSTEM" == "btrfs" ]] || fail "invalid filesystem"
 for number in "$INSTALL_TIMEOUT" "$BOOT_TIMEOUT"; do
   [[ "$number" =~ ^[1-9][0-9]*$ ]] || fail "timeouts must be positive integers"
 done
@@ -113,6 +117,7 @@ d-i user-setup/allow-password-weak boolean true
 d-i partman/early_command string test "\$(list-devices disk | tr '\\n' ' ')" = "/dev/vda " && echo NOVA_PHASE2_PRESEED_LOADED >/dev/ttyS0
 d-i partman-auto/disk string /dev/vda
 d-i partman-auto/method string regular
+d-i partman/default_filesystem string $FILESYSTEM
 d-i partman-auto/choose_recipe select atomic
 d-i partman-partitioning/choose_label select gpt
 d-i partman-partitioning/default_label string gpt
@@ -127,7 +132,7 @@ tasksel tasksel/first multiselect
 d-i grub-installer/only_debian boolean true
 d-i grub-installer/with_other_os boolean false
 d-i grub-installer/bootdev string /dev/vda
-d-i preseed/late_command string set -e; cp /nova-phase2-firstboot.sh /target/usr/local/sbin/nova-phase2-firstboot.sh; chmod 0700 /target/usr/local/sbin/nova-phase2-firstboot.sh; cp /nova-phase2-firstboot.service /target/etc/systemd/system/nova-phase2-firstboot.service; touch /target/etc/nova-phase2-ci-only; in-target systemctl enable nova-phase2-firstboot.service; mkdir -p /target/etc/default/grub.d; printf 'GRUB_CMDLINE_LINUX_DEFAULT="console=tty0 console=ttyS0,115200n8"\\n' > /target/etc/default/grub.d/nova-phase2-ci.cfg; in-target update-grub; test -s /target/boot/grub/grub.cfg; echo NOVA_PHASE2_INSTALL_COMPLETE >/dev/ttyS0
+d-i preseed/late_command string set -e; cp /nova-phase2-firstboot.sh /target/usr/local/sbin/nova-phase2-firstboot.sh; chmod 0700 /target/usr/local/sbin/nova-phase2-firstboot.sh; cp /nova-phase2-firstboot.service /target/etc/systemd/system/nova-phase2-firstboot.service; touch /target/etc/nova-phase2-ci-only; in-target systemctl enable nova-phase2-firstboot.service; mkdir -p /target/etc/default/grub.d; printf 'GRUB_CMDLINE_LINUX_DEFAULT="console=tty0 console=ttyS0,115200n8"\\n' > /target/etc/default/grub.d/nova-phase2-ci.cfg; in-target update-grub; test -s /target/boot/grub/grub.cfg; echo $FILESYSTEM > /target/etc/nova-phase2-expected-fstype; echo NOVA_PHASE2_INSTALL_COMPLETE >/dev/ttyS0
 d-i finish-install/reboot_in_progress note
 # Do NOT request a kernel halt: QEMU's -no-reboot exits on the real installer
 # reboot, but a halted kernel can leave QEMU running indefinitely.
@@ -236,10 +241,10 @@ wait_qemu_exit() {
 
 run_one() {
   local mode="$1"
-  local disk="$OUTPUT/nova-$mode-ci.qcow2"
-  local install_log="$OUTPUT/$mode-installer-serial.log"
-  local boot_log="$OUTPUT/$mode-installed-serial.log"
-  local result="$OUTPUT/$mode-result.txt"
+  local disk="$OUTPUT/nova-$mode-$FILESYSTEM-ci.qcow2"
+  local install_log="$OUTPUT/$mode-$FILESYSTEM-installer-serial.log"
+  local boot_log="$OUTPUT/$mode-$FILESYSTEM-installed-serial.log"
+  local result="$OUTPUT/$mode-$FILESYSTEM-result.txt"
   rm -f "$result"
   # Reject existing files rather than reuse (or overwrite) a disk.
   [[ ! -e "$disk" ]] || fail "refusing to overwrite existing disk: $disk"
@@ -295,7 +300,7 @@ run_one() {
         return 1
       fi
       echo "PASS: $mode installed NOVA booted without ISO, passed guest checks and shut down cleanly"
-      printf 'mode=%s\nresult=PASS\npostinstall=verified\nshutdown=verified\n' "$mode" > "$result"
+      printf 'mode=%s\nfilesystem=%s\nresult=PASS\npostinstall=verified\nshutdown=verified\n' "$mode" "$FILESYSTEM" > "$result"
       return 0
     fi
     if [[ -f "$boot_log" ]] && grep -Fq 'NOVA_PHASE2_GUEST_FAIL' "$boot_log"; then
@@ -328,4 +333,4 @@ for mode in "${modes[@]}"; do
   if ! run_one "$mode"; then failed=$((failed+1)); fi
 done
 if (( failed > 0 )); then fail "$failed/${#modes[@]} installer and first-boot paths failed"; fi
-echo "NOVA Phase 2 disposable installer smoke PASS (${modes[*]})"
+echo "NOVA Phase 2 disposable installer smoke PASS (${modes[*]}, $FILESYSTEM)"

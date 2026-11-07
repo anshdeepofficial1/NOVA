@@ -13,6 +13,7 @@ on:
       - "apps/shell/src-tauri/Cargo.lock"
       - "package.json"
       - "scripts/stage-sidecar.sh"
+      - "scripts/smoke-desktop-sidecar.sh"
       - "scripts/validate-live-build-config.sh"
       - "scripts/validate-iso.sh"
       - "scripts/smoke-iso-qemu.sh"
@@ -56,7 +57,8 @@ jobs:
             build-essential curl wget file \
             libxdo-dev libssl-dev \
             libayatana-appindicator3-dev librsvg2-dev \
-            qemu-system-x86 qemu-utils ovmf
+            qemu-system-x86 qemu-utils ovmf \
+            xvfb dbus-daemon
 
       - name: Verify Rust source and committed dependency locks
         run: |
@@ -73,7 +75,8 @@ jobs:
             scripts/validate-live-build-config.sh \
             scripts/validate-iso.sh \
             scripts/smoke-iso-qemu.sh \
-            scripts/test-smoke-iso-qemu.sh; do
+            scripts/test-smoke-iso-qemu.sh \
+            scripts/smoke-desktop-sidecar.sh; do
             bash -n "$script"
           done
           bash scripts/test-smoke-iso-qemu.sh
@@ -91,6 +94,8 @@ jobs:
           cargo metadata --locked --manifest-path apps/shell/src-tauri/Cargo.toml --format-version 1 > "$RUNNER_TEMP/nova-tauri-metadata.json"
           cargo test --manifest-path apps/shell/src-tauri/Cargo.toml --locked
           cargo clippy --manifest-path apps/shell/src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+          package="$(find apps/shell/src-tauri/target/release/bundle/deb -maxdepth 1 -name "*.deb" -print -quit)"
+          bash scripts/smoke-desktop-sidecar.sh "$package"
 
       - name: Build NOVA host daemon
         run: cargo build --release -p nova-daemon --locked

@@ -28,6 +28,7 @@ jobs:
           bash -n scripts/validate-iso.sh
           bash -n scripts/smoke-iso-qemu.sh
           bash -n scripts/test-smoke-iso-qemu.sh
+          bash -n scripts/smoke-desktop-sidecar.sh
           bash -n os/debian-live/build.sh
           bash -n os/debian-live/auto/build
           sh -n os/debian-live/auto/config
@@ -107,7 +108,8 @@ jobs:
             libxdo-dev \
             libssl-dev \
             libayatana-appindicator3-dev \
-            librsvg2-dev
+            librsvg2-dev \
+            xvfb dbus-daemon
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
@@ -121,6 +123,7 @@ jobs:
           dpkg-deb --contents "$package" | tee "$RUNNER_TEMP/nova-deb-contents.txt"
           grep -q "nova-shell" "$RUNNER_TEMP/nova-deb-contents.txt"
           grep -q "nova-daemon" "$RUNNER_TEMP/nova-deb-contents.txt"
+          bash scripts/smoke-desktop-sidecar.sh "$package"
       - name: Verify native desktop Rust quality and daemon startup regressions
         run: |
           cargo metadata --locked --manifest-path apps/shell/src-tauri/Cargo.toml --format-version 1 > "$RUNNER_TEMP/nova-tauri-metadata.json"

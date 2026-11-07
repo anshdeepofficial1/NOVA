@@ -8,7 +8,7 @@ This document prevents a roadmap item, a package in an image, or a successful bu
 - Workspace compiles with warnings denied.
 - Unit tests and API smoke tests pass.
 - TypeScript checks and production build pass.
-- Native desktop package contains the UI and its intended local service.
+- Native desktop package contains the UI and its intended local service; a headless launch smoke test proves the bundled daemon starts and is cleaned up with the desktop process.
 - Dependency and build provenance are recorded.
 
 ### M1 — Bootable development image

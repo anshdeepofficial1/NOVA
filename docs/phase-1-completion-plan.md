@@ -41,6 +41,7 @@ adapters, cloud services, a custom compositor and AI assistant remain later work
 - Run the API health, system-info and compatibility smoke tests.
 - Run frontend typecheck and production build.
 - Build and inspect the native Debian desktop package and its daemon sidecar.
+- Install and launch the packaged desktop under a disposable Xvfb/DBus session; verify the bundled daemon health endpoint starts and stops with the app.
 - Validate the Debian Trixie live-build configuration.
 - Validate the final ISO checksum, BIOS/UEFI boot catalog, EFI loaders/signatures,
   GRUB configuration, ISOLINUX configuration, kernel, initrd and SquashFS.
@@ -60,7 +61,7 @@ adapters, cloud services, a custom compositor and AI assistant remain later work
 ### 6. Close Phase 1
 Phase 1 is accepted only when all of the following are true:
 - M0 source and native desktop CI passes.
-- The desktop daemon-start regression tests pass.
+- The desktop daemon-start regression tests and packaged-app sidecar smoke test pass.
 - npm and both Rust Cargo lockfiles are committed and enforced by CI.
 - The fresh ISO build and structural validation pass.
 - BIOS, standard UEFI and Secure Boot UEFI boot smoke tests all pass.

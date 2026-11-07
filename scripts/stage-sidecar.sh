@@ -40,7 +40,7 @@ echo "Generating the NOVA application icon set..."
 npm run icons --workspace @nova/shell
 
 echo "Building NOVA host daemon for $TARGET_TRIPLE..."
-cargo build --release --target "$TARGET_TRIPLE" -p nova-daemon
+cargo build --release --locked --target "$TARGET_TRIPLE" -p nova-daemon
 
 BINARY_SOURCE="$ROOT_DIR/target/$TARGET_TRIPLE/release/nova-daemon"
 BINARY_DEST_DIR="$ROOT_DIR/apps/shell/src-tauri/binaries"

@@ -48,7 +48,7 @@ npm run build
 npm run desktop:build
 ~~~
 
-CI runs Rust format/test/Clippy and builds the frontend and native Linux Debian package, including icon generation and the daemon sidecar.
+CI runs Rust format/test/Clippy and builds the frontend and native Linux Debian package, including icon generation and the daemon sidecar. It also launches the packaged desktop in an isolated Xvfb/DBus session and verifies the daemon sidecar lifecycle.
 
 ## Build the bootable image
 

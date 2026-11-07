@@ -271,7 +271,7 @@ for attempt in range(25):
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(3)
             sock.connect(sock_path)
-            sock.sendall(("screendump " + screenshot + "\\r\\n").encode())
+            sock.sendall(("screendump " + screenshot + "\r\n").encode())
             time.sleep(2)
         if pathlib.Path(screenshot).is_file() and pathlib.Path(screenshot).stat().st_size > 1024:
             sys.exit(0)
@@ -343,7 +343,7 @@ run_one() {
        grep -Fq 'NOVA_PHASE2_GRAPHICAL_SESSION_OK' "$boot_log"; then
       if ! capture_guest_screen "$monitor_socket" "$screenshot"; then
         echo "FAIL: real graphical session screenshot not captured" >&2
-        printf 'mode=%s\\nresult=FAIL\\nstage=graphical_screenshot\\n' "$mode" > "$result"
+        printf 'mode=%s\nresult=FAIL\nstage=graphical_screenshot\n' "$mode" > "$result"
         return 1
       fi
       screenshot_done=true
@@ -351,7 +351,7 @@ run_one() {
     if [[ -f "$boot_log" ]] && grep -Fq 'NOVA_PHASE2_GUEST_PASS' "$boot_log"; then
       if [[ "$GRAPHICAL" == true && "$screenshot_done" != true ]]; then
         echo "FAIL: no verified graphical session screenshot" >&2
-        printf 'mode=%s\\nresult=FAIL\\nstage=graphical_evidence\\n' "$mode" > "$result"
+        printf 'mode=%s\nresult=FAIL\nstage=graphical_evidence\n' "$mode" > "$result"
         return 1
       fi
       if ! grep -Fq "NOVA_PHASE2_FIRMWARE=$mode" "$boot_log" ||

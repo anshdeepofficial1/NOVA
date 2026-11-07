@@ -7,7 +7,7 @@ if [[ -z "$PACKAGE" || ! -s "$PACKAGE" ]]; then
   exit 2
 fi
 
-for tool in sudo apt-get curl dbus-run-session xvfb-run xdotool timeout; do
+for tool in sudo apt-get curl dbus-run-session xvfb-run openbox wmctrl timeout; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "Missing desktop smoke-test dependency: $tool" >&2
     exit 1
@@ -26,11 +26,12 @@ cp "$PACKAGE_PATH" "$SMOKE_PACKAGE"
 sudo apt-get install -y --no-install-recommends "$SMOKE_PACKAGE"
 rm -f "$SMOKE_PACKAGE"
 
-# Launch the installed application in an isolated graphical session. Closing
-# the window normally exercises Tauri's RunEvent::Exit shutdown hook.
+# Run the real installed app under Xvfb + Openbox. wmctrl sends an EWMH close
+# request so GTK/Tauri can handle WM_DELETE_WINDOW and run its Exit cleanup.
 timeout --signal=TERM --kill-after=5s 60s \
   dbus-run-session -- xvfb-run -a bash -euo pipefail -c '
     LOG_PATH="${RUNNER_TEMP:-/tmp}/nova-desktop-smoke.log"
+    WM_LOG_PATH="${RUNNER_TEMP:-/tmp}/nova-openbox-smoke.log"
     HEALTH_PATH="${RUNNER_TEMP:-/tmp}/nova-desktop-health.json"
 
     if curl -fsS http://127.0.0.1:47820/health >/dev/null 2>&1; then
@@ -38,17 +39,44 @@ timeout --signal=TERM --kill-after=5s 60s \
       exit 1
     fi
 
-    : > "$LOG_PATH"
-    /usr/bin/nova-shell >"$LOG_PATH" 2>&1 &
-    app_pid=$!
+    openbox --sm-disable >"$WM_LOG_PATH" 2>&1 &
+    wm_pid=$!
+    app_pid=""
 
     cleanup() {
-      if [[ -n "${app_pid:-}" ]] && kill -0 "$app_pid" 2>/dev/null; then
+      if [[ -n "${app_pid:-}" ]]; then
         kill -KILL "$app_pid" 2>/dev/null || true
         wait "$app_pid" 2>/dev/null || true
       fi
+      if [[ -n "${wm_pid:-}" ]]; then
+        kill -TERM "$wm_pid" 2>/dev/null || true
+        wait "$wm_pid" 2>/dev/null || true
+      fi
     }
     trap cleanup EXIT
+
+    wm_ready=false
+    for attempt in $(seq 1 30); do
+      if wmctrl -m >/dev/null 2>&1; then
+        wm_ready=true
+        break
+      fi
+      if ! kill -0 "$wm_pid" 2>/dev/null; then
+        echo "Openbox exited before the test desktop was ready." >&2
+        cat "$WM_LOG_PATH" >&2
+        exit 1
+      fi
+      sleep 0.2
+    done
+    if [[ "$wm_ready" != true ]]; then
+      echo "Openbox did not become ready in the Xvfb session." >&2
+      cat "$WM_LOG_PATH" >&2
+      exit 1
+    fi
+
+    : > "$LOG_PATH"
+    /usr/bin/nova-shell >"$LOG_PATH" 2>&1 &
+    app_pid=$!
 
     healthy=false
     for attempt in $(seq 1 40); do
@@ -77,14 +105,14 @@ timeout --signal=TERM --kill-after=5s 60s \
       exit 1
     }
 
-    window_id="$(xdotool search --onlyvisible --name "NOVA Desktop" 2>/dev/null | head -n 1 || true)"
-    if [[ -z "$window_id" ]]; then
-      echo "NOVA Desktop daemon started but its visible application window was not found." >&2
+    if ! wmctrl -l | grep -Fq "NOVA Desktop"; then
+      echo "NOVA Desktop daemon started but its application window was not registered with Openbox." >&2
       cat "$LOG_PATH" >&2
+      cat "$WM_LOG_PATH" >&2
       exit 1
     fi
 
-    xdotool windowclose "$window_id"
+    wmctrl -c "NOVA Desktop"
 
     stopped=false
     for shutdown_attempt in $(seq 1 30); do
@@ -96,13 +124,14 @@ timeout --signal=TERM --kill-after=5s 60s \
     done
 
     if [[ "$stopped" != true ]]; then
-      echo "NOVA daemon remained healthy after the desktop window closed." >&2
+      echo "NOVA daemon remained healthy after the normal desktop close request." >&2
       cat "$LOG_PATH" >&2
+      cat "$WM_LOG_PATH" >&2
       exit 1
     fi
 
-    # The process itself must finish after its sidecar is stopped.
+    # The app process itself must finish after the sidecar is stopped.
     wait "$app_pid"
     app_pid=""
-    echo "Packaged desktop opened, reported a healthy daemon, and closed with its sidecar stopped."
+    echo "Packaged desktop opened, reported a healthy daemon, and exited with its sidecar stopped."
   '

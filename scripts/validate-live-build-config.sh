@@ -6,6 +6,9 @@ LIVE_DIR="$ROOT_DIR/os/debian-live"
 PACKAGE_LIST="$LIVE_DIR/config/package-lists/nova-desktop.list.chroot"
 GRUB_CONFIG="$LIVE_DIR/config/bootloaders/grub-pc/config.cfg"
 ISOLINUX_CONFIG="$LIVE_DIR/config/bootloaders/isolinux/isolinux.cfg"
+FIRSTBOOT_SCRIPT="$LIVE_DIR/config/includes.chroot/usr/local/sbin/nova-firstboot-init"
+FIRSTBOOT_UNIT="$LIVE_DIR/config/includes.chroot/usr/lib/systemd/system/nova-firstboot.service"
+FIRSTBOOT_HOOK="$LIVE_DIR/config/hooks/live/9000-enable-nova-firstboot.hook.chroot"
 TEMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
@@ -27,13 +30,26 @@ for path in \
   "$LIVE_DIR/config/archives/debian-backports.list.binary" \
   "$PACKAGE_LIST" \
   "$GRUB_CONFIG" \
-  "$ISOLINUX_CONFIG"; do
+  "$ISOLINUX_CONFIG" \
+  "$FIRSTBOOT_SCRIPT" \
+  "$FIRSTBOOT_UNIT" \
+  "$FIRSTBOOT_HOOK"; do
   [[ -s "$path" ]] || fail "required file is missing or empty: $path"
 done
 
 for path in "$LIVE_DIR/auto/config" "$LIVE_DIR/auto/clean" "$LIVE_DIR/auto/build" "$LIVE_DIR/build.sh"; do
   [[ -x "$path" ]] || fail "build script is not executable: $path"
 done
+
+# Verify first boot will actually be installed and enabled, not just documented.
+[[ -x "$FIRSTBOOT_SCRIPT" ]] || fail "installed NOVA first-boot script must be executable"
+[[ -x "$FIRSTBOOT_HOOK" ]] || fail "live-build first-boot enable hook must be executable"
+bash -n "$FIRSTBOOT_SCRIPT"
+sh -n "$FIRSTBOOT_HOOK"
+grep -Fq 'systemctl enable nova-firstboot.service' "$FIRSTBOOT_HOOK" || fail "NOVA first-boot service is not enabled"
+grep -Fq 'ExecStart=/usr/local/sbin/nova-firstboot-init' "$FIRSTBOOT_UNIT" || fail "first-boot service has incorrect executable"
+grep -Fq 'ConditionPathExists=!/run/live/medium' "$FIRSTBOOT_UNIT" || fail "first-boot service must never mark live ISO boots"
+grep -Fq 'StateDirectory=nova' "$FIRSTBOOT_UNIT" || fail "first-boot state directory is not protected"
 
 CONFIG="$LIVE_DIR/auto/config"
 grep -Fq -- '--distribution trixie' "$CONFIG" || fail "distribution is not pinned to Trixie"

@@ -1,0 +1,6 @@
+#!/bin/sh
+# Enable in the built image; the unit and script skip Debian Live boots.
+# The installer copies this enabled unit into the installed filesystem.
+set -eu
+systemctl enable nova-firstboot.service
+test -L /etc/systemd/system/multi-user.target.wants/nova-firstboot.service

@@ -94,6 +94,7 @@ jobs:
             --iso "$NOVA_ISO" \
             --firmware uefi \
             --filesystem btrfs \
+            --preserve-secondary \
             --output-dir "$RUNNER_TEMP/nova-installed-btrfs" \
             --install-timeout 5400 \
             --boot-timeout 1200

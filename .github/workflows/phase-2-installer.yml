@@ -47,6 +47,7 @@ jobs:
         run: |
           bash -n scripts/smoke-installed-iso-qemu.sh
           bash -n scripts/phase2-firstboot.sh
+          bash -n scripts/phase2-btrfs-layout-ci.sh
           grep -Fq 'partman-auto/disk string /dev/vda' scripts/smoke-installed-iso-qemu.sh
           grep -Fq 'if=virtio,format=qcow2,file=$disk' scripts/smoke-installed-iso-qemu.sh
           grep -Fq 'refusing to overwrite existing disk' scripts/smoke-installed-iso-qemu.sh
@@ -94,6 +95,7 @@ jobs:
             --iso "$NOVA_ISO" \
             --firmware uefi \
             --filesystem btrfs \
+            --btrfs-layout \
             --preserve-secondary \
             --output-dir "$RUNNER_TEMP/nova-installed-btrfs" \
             --install-timeout 5400 \

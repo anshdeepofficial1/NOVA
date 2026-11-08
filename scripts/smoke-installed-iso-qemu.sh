@@ -8,6 +8,7 @@ ISO="$ROOT/os/debian-live/live-image-amd64.hybrid.iso"
 FIRMWARE="uefi"
 FILESYSTEM="ext4"
 PRESERVE_SECONDARY=false
+BTRFS_LAYOUT=false
 OUTPUT="$ROOT/os/debian-live/validation/installed"
 INSTALL_TIMEOUT=5400
 BOOT_TIMEOUT=1200
@@ -24,6 +25,7 @@ Usage: scripts/smoke-installed-iso-qemu.sh [options]
  --firmware uefi|bios|all  QEMU installation mode (default: uefi)
  --filesystem ext4|btrfs  Test-only installed root filesystem (default: ext4)
  --preserve-secondary     Add a writable non-target disk and verify no writes
+ --btrfs-layout           CI-only @home, @snapshots and data restore proof
  --output-dir DIR         Reports, logs and disposable qcow2 disks
  --install-timeout N      Installer seconds (default: 5400)
  --boot-timeout N         Installed-system seconds (default: 1200)
@@ -41,6 +43,7 @@ while (( $# )); do
     --firmware) FIRMWARE="$2"; shift 2 ;;
     --filesystem) FILESYSTEM="$2"; shift 2 ;;
     --preserve-secondary) PRESERVE_SECONDARY=true; shift ;;
+    --btrfs-layout) BTRFS_LAYOUT=true; shift ;;
     --output-dir) OUTPUT="$2"; shift 2 ;;
     --install-timeout) INSTALL_TIMEOUT="$2"; shift 2 ;;
     --boot-timeout) BOOT_TIMEOUT="$2"; shift 2 ;;
@@ -50,6 +53,7 @@ while (( $# )); do
 done
 [[ "$FIRMWARE" == "uefi" || "$FIRMWARE" == "bios" || "$FIRMWARE" == "all" ]] || fail "invalid firmware"
 [[ "$FILESYSTEM" == "ext4" || "$FILESYSTEM" == "btrfs" ]] || fail "invalid filesystem"
+[[ "$BTRFS_LAYOUT" != true || "$FILESYSTEM" == btrfs ]] || fail "--btrfs-layout requires --filesystem btrfs"
 for number in "$INSTALL_TIMEOUT" "$BOOT_TIMEOUT"; do
   [[ "$number" =~ ^[1-9][0-9]*$ ]] || fail "timeouts must be positive integers"
 done
@@ -99,6 +103,10 @@ PASSWORD_HASH="$(openssl passwd -6 -salt nova-phase2-ci-2026 NOVA-QEMU-Disposabl
 mkdir -p "$WORK/overlay"
 PARTMAN_DISKS="/dev/vda "
 if [[ "$PRESERVE_SECONDARY" == true ]]; then PARTMAN_DISKS="/dev/vda /dev/vdb "; fi
+LAYOUT_LATE=""
+if [[ "$BTRFS_LAYOUT" == true ]]; then
+  LAYOUT_LATE='; cp /nova-phase2-btrfs-layout-ci.sh /target/usr/local/sbin/nova-phase2-btrfs-layout-ci.sh; chmod 0700 /target/usr/local/sbin/nova-phase2-btrfs-layout-ci.sh; in-target /usr/local/sbin/nova-phase2-btrfs-layout-ci.sh'
+fi
 cat > "$WORK/overlay/preseed.cfg" <<PRESEED
 d-i debian-installer/locale string en_US.UTF-8
 d-i keyboard-configuration/xkb-keymap select us
@@ -137,13 +145,16 @@ tasksel tasksel/first multiselect
 d-i grub-installer/only_debian boolean true
 d-i grub-installer/with_other_os boolean false
 d-i grub-installer/bootdev string /dev/vda
-d-i preseed/late_command string set -e; cp /nova-phase2-firstboot.sh /target/usr/local/sbin/nova-phase2-firstboot.sh; chmod 0700 /target/usr/local/sbin/nova-phase2-firstboot.sh; cp /nova-phase2-firstboot.service /target/etc/systemd/system/nova-phase2-firstboot.service; touch /target/etc/nova-phase2-ci-only; in-target systemctl enable nova-phase2-firstboot.service; mkdir -p /target/etc/default/grub.d; printf 'GRUB_CMDLINE_LINUX_DEFAULT="console=tty0 console=ttyS0,115200n8"\\n' > /target/etc/default/grub.d/nova-phase2-ci.cfg; in-target update-grub; test -s /target/boot/grub/grub.cfg; echo $FILESYSTEM > /target/etc/nova-phase2-expected-fstype; echo NOVA_PHASE2_INSTALL_COMPLETE >/dev/ttyS0
+d-i preseed/late_command string set -e; cp /nova-phase2-firstboot.sh /target/usr/local/sbin/nova-phase2-firstboot.sh; chmod 0700 /target/usr/local/sbin/nova-phase2-firstboot.sh; cp /nova-phase2-firstboot.service /target/etc/systemd/system/nova-phase2-firstboot.service; touch /target/etc/nova-phase2-ci-only; in-target systemctl enable nova-phase2-firstboot.service; mkdir -p /target/etc/default/grub.d; printf 'GRUB_CMDLINE_LINUX_DEFAULT="console=tty0 console=ttyS0,115200n8"\\n' > /target/etc/default/grub.d/nova-phase2-ci.cfg; in-target update-grub; test -s /target/boot/grub/grub.cfg; echo $FILESYSTEM > /target/etc/nova-phase2-expected-fstype$LAYOUT_LATE; echo NOVA_PHASE2_INSTALL_COMPLETE >/dev/ttyS0
 d-i finish-install/reboot_in_progress note
 # Do NOT request a kernel halt: QEMU's -no-reboot exits on the real installer
 # reboot, but a halted kernel can leave QEMU running indefinitely.
 d-i cdrom-detect/eject boolean false
 PRESEED
 install -m 0755 "$ROOT/scripts/phase2-firstboot.sh" "$WORK/overlay/nova-phase2-firstboot.sh"
+if [[ "$BTRFS_LAYOUT" == true ]]; then
+  install -m 0755 "$ROOT/scripts/phase2-btrfs-layout-ci.sh" "$WORK/overlay/nova-phase2-btrfs-layout-ci.sh"
+fi
 cat > "$WORK/overlay/nova-phase2-firstboot.service" <<'SERVICE'
 [Unit]
 Description=NOVA disposable VM first-boot acceptance
@@ -167,6 +178,9 @@ echo "CI installer overlay file list:"
 printf '%s\n' "$overlay_entries"
 grep -Fq 'preseed.cfg' <<< "$overlay_entries" || fail "CI preseed missing from overlay"
 grep -Fq 'nova-phase2-firstboot.sh' <<< "$overlay_entries" || fail "CI guest probe missing from overlay"
+if [[ "$BTRFS_LAYOUT" == true ]]; then
+  grep -Fq 'nova-phase2-btrfs-layout-ci.sh' <<< "$overlay_entries" || fail "CI Btrfs layout probe missing from overlay"
+fi
 cat "$WORK/ci-overlay.cpio" >> "$WORK/initrd.raw"
 gzip -1 -c "$WORK/initrd.raw" > "$WORK/test-initrd.gz"
 [[ -s "$WORK/test-initrd.gz" ]] || fail "could not generate CI installer initrd"
@@ -305,6 +319,15 @@ run_one() {
   local waited=0
   while (( waited < BOOT_TIMEOUT )); do
     if [[ -f "$boot_log" ]] && grep -Fq 'NOVA_PHASE2_GUEST_PASS' "$boot_log"; then
+      if [[ "$BTRFS_LAYOUT" == true ]]; then
+        for evidence in NOVA_PHASE2_BTRFS_LAYOUT_OK NOVA_PHASE2_SNAPSHOT_RESTORE_DATA_OK; do
+          if ! grep -Fq "$evidence" "$boot_log"; then
+            echo "FAIL: installed Btrfs layout or data restore evidence missing: $evidence" >&2
+            printf 'mode=%s\nresult=FAIL\nstage=btrfs_layout_evidence\n' "$mode" > "$result"
+            return 1
+          fi
+        done
+      fi
       if ! grep -Fq "NOVA_PHASE2_FIRMWARE=$mode" "$boot_log" ||
          ! grep -Fq 'NOVA_PHASE2_ROOT_SOURCE=' "$boot_log" ||
          ! grep -Fq 'NOVA_PHASE2_ROOT_FSTYPE=' "$boot_log"; then

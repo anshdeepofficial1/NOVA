@@ -119,6 +119,12 @@ jobs:
           find "$RUNNER_TEMP/nova-iso" -name '*.sha256' -size +0c -print
           iso="$(find "$RUNNER_TEMP/nova-iso" -name 'live-image-amd64.hybrid.iso' -print -quit)"
           [[ -s "$iso" && -s "$iso.sha256" ]]
+          # Reject corrupt or mismatched downloaded ISO bytes before any VM install.
+          # The build writes a basename-relative sha256sum manifest.
+          (cd "$(dirname "$iso")" && sha256sum --check --status "$(basename "$iso").sha256") || {
+            echo "::error::Downloaded ISO does not match its build SHA-256 manifest."
+            exit 1
+          }
           echo "NOVA_ISO=$iso" >> "$GITHUB_ENV"
       - name: Install to disposable qcow2 and verify disk-only boot
         env:

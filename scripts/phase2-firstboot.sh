@@ -192,9 +192,12 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
     exit 1
   fi
   echo "NOVA_PHASE2_GRAPHICAL_SESSION_OK"
-  # Keep the disposable guest active so the host can capture the real VGA
-  # framebuffer before the guest completes its automated shutdown.
+  # Emit the final acceptance marker before the screenshot grace period.
+  # The host checks the screenshot before accepting this marker and waits
+  # for clean shutdown, so this cannot bypass graphical evidence.
+  echo "NOVA_PHASE2_GUEST_PASS"
+  # Keep the disposable guest alive for the QEMU framebuffer capture.
   sleep 15
+else
+  echo "NOVA_PHASE2_GUEST_PASS"
 fi
-
-echo "NOVA_PHASE2_GUEST_PASS"

@@ -54,6 +54,7 @@ jobs:
         run: |
           bash -n scripts/smoke-installed-iso-qemu.sh
           bash -n scripts/phase2-firstboot.sh
+          bash -n scripts/phase2-btrfs-layout-ci.sh
           grep -Fq 'partman-auto/disk string /dev/vda' scripts/smoke-installed-iso-qemu.sh
           grep -Fq 'if=virtio,format=qcow2,file=$disk' scripts/smoke-installed-iso-qemu.sh
           grep -Fq 'refusing to overwrite existing disk' scripts/smoke-installed-iso-qemu.sh
@@ -73,6 +74,39 @@ jobs:
           echo "run_id=$run" >> "$GITHUB_OUTPUT"
           gh run view "$run" --json conclusion,headSha --jq '{conclusion,headSha}'
           [[ "$(gh run view "$run" --json conclusion --jq .conclusion)" == success ]]
+          # Bind evidence to the exact successful ISO run. A workflow_run event
+          # must use its triggering build, even if main advances meanwhile.
+          # For manual/push runs, reject stale implicit latest-build selection;
+          # an explicitly requested historical build remains traceable.
+          run_json="$(gh run view "$run" --json headSha,headBranch,workflowName,event)"
+          iso_sha="$(jq -r .headSha <<< "$run_json")"
+          iso_branch="$(jq -r .headBranch <<< "$run_json")"
+          iso_workflow="$(jq -r .workflowName <<< "$run_json")"
+          [[ "$iso_workflow" == "Build NOVA ISO" && "$iso_branch" == main ]] || {
+            echo "::error::Run $run is not a Build NOVA ISO run from main."
+            exit 1
+          }
+          if [[ "${{ github.event_name }}" == workflow_run ]]; then
+            [[ "$run" == "${{ github.event.workflow_run.id }}" && "$iso_sha" == "${{ github.event.workflow_run.head_sha }}" ]] || {
+              echo "::error::Triggered ISO run ID/SHA mismatch."
+              exit 1
+            }
+          elif [[ -z "${{ inputs.iso_run_id || '' }}" ]]; then
+            main_sha="$(gh api repos/${GITHUB_REPOSITORY}/git/ref/heads/main --jq .object.sha)"
+            if [[ "$iso_sha" != "$main_sha" ]]; then
+              # Documentation commits do not alter ISO bytes. Check GitHub's
+              # actual intervening files rather than rejecting a valid build.
+              compare="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${iso_sha}...${main_sha}")"
+              # Exact paths below do not feed build-iso.yml; installer-test
+              # harness updates cannot change an already built release ISO.
+              if ! jq -e '(.status == "ahead") and (.total_commits <= 10) and (.files | length > 0 and length <= 10) and all(.files[]; (.filename | startswith("docs/")) or (.filename == "scripts/smoke-installed-iso-qemu.sh") or (.filename == "scripts/phase2-firstboot.sh") or (.filename == ".github/workflows/phase-2-installer.yml"))' <<< "$compare" >/dev/null; then
+                echo "::error::Implicit ISO $run differs from main in code or its history cannot be proven docs-only ($iso_sha vs $main_sha). Rebuild or explicitly select a run."
+                exit 1
+              fi
+              echo "::notice::ISO $run at $iso_sha is equivalent to current main image (docs-only changes through $main_sha)."
+            fi
+          fi
+          echo "Selected immutable ISO run $run at commit $iso_sha"
       - name: Download exact tested NOVA ISO artifact
         env:
           GH_TOKEN: ${{ github.token }}
@@ -95,6 +129,26 @@ jobs:
             --output-dir "$RUNNER_TEMP/nova-installed" \
             --install-timeout 5400 \
             --boot-timeout 1200
+      - name: Validate persistent Btrfs layout, snapshot restoration and disk preservation
+        run: |
+          sudo bash scripts/smoke-installed-iso-qemu.sh \
+            --iso "$NOVA_ISO" \
+            --firmware uefi \
+            --filesystem btrfs \
+            --btrfs-layout \
+            --preserve-secondary \
+            --output-dir "$RUNNER_TEMP/nova-installed-btrfs-layout" \
+            --install-timeout 5400 \
+            --boot-timeout 1200
+      - name: Validate real SDDM Wayland and NOVA Desktop user session
+        run: |
+          sudo bash scripts/smoke-installed-iso-qemu.sh \
+            --iso "$NOVA_ISO" \
+            --firmware uefi \
+            --graphical \
+            --output-dir "$RUNNER_TEMP/nova-installed-graphical" \
+            --install-timeout 5400 \
+            --boot-timeout 1200
       - name: Upload installation and first-boot diagnostics
         if: always()
         uses: actions/upload-artifact@v7
@@ -103,5 +157,10 @@ jobs:
           path: |
             ${{ runner.temp }}/nova-installed/*.log
             ${{ runner.temp }}/nova-installed/*-result.txt
+            ${{ runner.temp }}/nova-installed-btrfs-layout/*.log
+            ${{ runner.temp }}/nova-installed-btrfs-layout/*-result.txt
+            ${{ runner.temp }}/nova-installed-graphical/*.log
+            ${{ runner.temp }}/nova-installed-graphical/*-result.txt
+            ${{ runner.temp }}/nova-installed-graphical/*-graphical-session.ppm
           if-no-files-found: warn
           retention-days: 14

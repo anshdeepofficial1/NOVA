@@ -262,7 +262,7 @@ run_one() {
   if [[ "$PRESERVE_SECONDARY" == true ]]; then
     [[ ! -e "$secondary" && ! -L "$secondary" ]] || fail "refusing to overwrite existing secondary disk: $secondary"
     truncate -s 64M "$secondary"
-    printf 'NOVA_PHASE2_PRESERVE_THIS_NON_TARGET_DISK\\n' | dd of="$secondary" bs=1 seek=4096 conv=notrunc status=none
+    printf 'NOVA_PHASE2_PRESERVE_THIS_NON_TARGET_DISK\n' | dd of="$secondary" bs=1 seek=4096 conv=notrunc status=none
     sha256sum "$secondary" > "$WORK/$mode-$FILESYSTEM-nontarget.sha256"
     secondary_args=(-drive "if=virtio,format=raw,file=$secondary")
   fi
@@ -318,7 +318,7 @@ run_one() {
       if [[ "$PRESERVE_SECONDARY" == true ]]; then
         if ! sha256sum -c "$WORK/$mode-$FILESYSTEM-nontarget.sha256"; then
           echo "FAIL: installed system modified the non-target disk" >&2
-          printf 'mode=%s\\nresult=FAIL\\nstage=non_target_disk_changed\\n' "$mode" > "$result"
+          printf 'mode=%s\nresult=FAIL\nstage=non_target_disk_changed\n' "$mode" > "$result"
           return 1
         fi
         echo "NOVA_PHASE2_NON_TARGET_DISK_PRESERVED"

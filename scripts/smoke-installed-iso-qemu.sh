@@ -288,7 +288,7 @@ run_one() {
       # QEMU ttyS0 serial logs are CRLF-terminated. Accept exactly the marker
       # with LF or CRLF, never a substring or a marker with extra content.
       if ! grep -Fxq 'NOVA_PHASE2_PRODUCTION_FIRSTBOOT_OK' "$boot_log" &&
-         ! grep -Fxq 
+         ! grep -Fxq "NOVA_PHASE2_PRODUCTION_FIRSTBOOT_OK$(printf '\015')" "$boot_log"; then
         echo "FAIL: installed production firstboot marker missing" >&2
         printf 'mode=%s\nresult=FAIL\nstage=production_firstboot_unverified\n' "$mode" > "$result"
         return 1

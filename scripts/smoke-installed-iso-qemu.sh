@@ -7,6 +7,7 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 ISO="$ROOT/os/debian-live/live-image-amd64.hybrid.iso"
 FIRMWARE="uefi"
 FILESYSTEM="ext4"
+PRESERVE_SECONDARY=false
 OUTPUT="$ROOT/os/debian-live/validation/installed"
 INSTALL_TIMEOUT=5400
 BOOT_TIMEOUT=1200
@@ -22,6 +23,7 @@ Usage: scripts/smoke-installed-iso-qemu.sh [options]
  --iso PATH               NOVA ISO (defaults to build output)
  --firmware uefi|bios|all  QEMU installation mode (default: uefi)
  --filesystem ext4|btrfs  Test-only installed root filesystem (default: ext4)
+ --preserve-secondary     Add a writable non-target disk and verify no writes
  --output-dir DIR         Reports, logs and disposable qcow2 disks
  --install-timeout N      Installer seconds (default: 5400)
  --boot-timeout N         Installed-system seconds (default: 1200)
@@ -38,6 +40,7 @@ while (( $# )); do
     --iso) ISO="$2"; shift 2 ;;
     --firmware) FIRMWARE="$2"; shift 2 ;;
     --filesystem) FILESYSTEM="$2"; shift 2 ;;
+    --preserve-secondary) PRESERVE_SECONDARY=true; shift ;;
     --output-dir) OUTPUT="$2"; shift 2 ;;
     --install-timeout) INSTALL_TIMEOUT="$2"; shift 2 ;;
     --boot-timeout) BOOT_TIMEOUT="$2"; shift 2 ;;
@@ -94,6 +97,8 @@ echo "Installer boot assets: $INSTALLER and $INITRD"
 # Test-only password: ephemeral machine, no external accounts or production secrets.
 PASSWORD_HASH="$(openssl passwd -6 -salt nova-phase2-ci-2026 NOVA-QEMU-Disposable)"
 mkdir -p "$WORK/overlay"
+PARTMAN_DISKS="/dev/vda "
+if [[ "$PRESERVE_SECONDARY" == true ]]; then PARTMAN_DISKS="/dev/vda /dev/vdb "; fi
 cat > "$WORK/overlay/preseed.cfg" <<PRESEED
 d-i debian-installer/locale string en_US.UTF-8
 d-i keyboard-configuration/xkb-keymap select us
@@ -114,7 +119,7 @@ d-i passwd/user-fullname string NOVA CI Tester
 d-i passwd/username string novatest
 d-i passwd/user-password-crypted password $PASSWORD_HASH
 d-i user-setup/allow-password-weak boolean true
-d-i partman/early_command string test "\$(list-devices disk | tr '\\n' ' ')" = "/dev/vda " && echo NOVA_PHASE2_PRESEED_LOADED >/dev/ttyS0
+d-i partman/early_command string test "\$(list-devices disk | tr '\\n' ' ')" = "$PARTMAN_DISKS" && echo NOVA_PHASE2_PRESEED_LOADED >/dev/ttyS0
 d-i partman-auto/disk string /dev/vda
 d-i partman-auto/method string regular
 d-i partman/default_filesystem string $FILESYSTEM
@@ -247,14 +252,25 @@ run_one() {
   local result="$OUTPUT/$mode-$FILESYSTEM-result.txt"
   rm -f "$result"
   # Reject existing files rather than reuse (or overwrite) a disk.
-  [[ ! -e "$disk" ]] || fail "refusing to overwrite existing disk: $disk"
+  [[ ! -e "$disk" && ! -L "$disk" ]] || fail "refusing to overwrite existing disk: $disk"
   qemu-img create -f qcow2 "$disk" "${DISK_GIB}G" >/dev/null
   [[ "$(qemu-img info --output=json "$disk" | python3 -c 'import json,sys; print(json.load(sys.stdin)["format"])')" == qcow2 ]] || fail "invalid generated disk format"
+  # The secondary disk is a fresh RAW FILE, never a host device. It is writable
+  # so an accidental installer write would be detected by its SHA-256 digest.
+  local secondary="$OUTPUT/nova-$mode-$FILESYSTEM-nontarget.raw"
+  local -a secondary_args=()
+  if [[ "$PRESERVE_SECONDARY" == true ]]; then
+    [[ ! -e "$secondary" && ! -L "$secondary" ]] || fail "refusing to overwrite existing secondary disk: $secondary"
+    truncate -s 64M "$secondary"
+    printf 'NOVA_PHASE2_PRESERVE_THIS_NON_TARGET_DISK\\n' | dd of="$secondary" bs=1 seek=4096 conv=notrunc status=none
+    sha256sum "$secondary" > "$WORK/$mode-$FILESYSTEM-nontarget.sha256"
+    secondary_args=(-drive "if=virtio,format=raw,file=$secondary")
+  fi
   boot_firmware_args "$mode"
   echo "Starting $mode Debian live-installer on a fresh disposable disk"
   "$QEMU" -machine q35 -accel "$ACCEL" -cpu max -m "$RAM_MIB" -smp "$CPUS" -vga std -display none \
     -serial "file:$install_log" -no-reboot \
-    -drive "if=virtio,format=qcow2,file=$disk" \
+    -drive "if=virtio,format=qcow2,file=$disk" "${secondary_args[@]}" \
     -cdrom "$ISO" -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
     "${FW_ARGS[@]}" -kernel "$WORK/vmlinuz" -initrd "$WORK/test-initrd.gz" \
     -append "auto=true auto-install/enable=true preseed/file=/preseed.cfg priority=critical console=ttyS0,115200n8 DEBIAN_FRONTEND=noninteractive netcfg/choose_interface=auto" \
@@ -281,7 +297,7 @@ run_one() {
   echo "Installer exited, now booting $mode virtual disk with ISO REMOVED"
   "$QEMU" -machine q35 -accel "$ACCEL" -cpu max -m "$RAM_MIB" -smp "$CPUS" -vga std -display none \
     -serial "file:$boot_log" -no-reboot -boot order=c \
-    -drive "if=virtio,format=qcow2,file=$disk" \
+    -drive "if=virtio,format=qcow2,file=$disk" "${secondary_args[@]}" \
     -netdev user,id=net0 -device virtio-net-pci,netdev=net0 "${FW_ARGS[@]}" \
     > "$OUTPUT/$mode-installed-qemu.log" 2>&1 &
   QEMU_PID=$!
@@ -299,8 +315,16 @@ run_one() {
         printf 'mode=%s\nresult=FAIL\nstage=guest_shutdown_%s\n' "$mode" "$WAIT_REASON" > "$result"
         return 1
       fi
+      if [[ "$PRESERVE_SECONDARY" == true ]]; then
+        if ! sha256sum -c "$WORK/$mode-$FILESYSTEM-nontarget.sha256"; then
+          echo "FAIL: installed system modified the non-target disk" >&2
+          printf 'mode=%s\\nresult=FAIL\\nstage=non_target_disk_changed\\n' "$mode" > "$result"
+          return 1
+        fi
+        echo "NOVA_PHASE2_NON_TARGET_DISK_PRESERVED"
+      fi
       echo "PASS: $mode installed NOVA booted without ISO, passed guest checks and shut down cleanly"
-      printf 'mode=%s\nfilesystem=%s\nresult=PASS\npostinstall=verified\nshutdown=verified\n' "$mode" "$FILESYSTEM" > "$result"
+      printf 'mode=%s\nfilesystem=%s\nresult=PASS\npostinstall=verified\nshutdown=verified\npreserved_secondary=%s\n' "$mode" "$FILESYSTEM" "$PRESERVE_SECONDARY" > "$result"
       return 0
     fi
     if [[ -f "$boot_log" ]] && grep -Fq 'NOVA_PHASE2_GUEST_FAIL' "$boot_log"; then

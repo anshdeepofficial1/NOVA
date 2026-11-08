@@ -21,6 +21,7 @@ on:
     paths:
       - "scripts/smoke-installed-iso-qemu.sh"
       - "scripts/phase2-firstboot.sh"
+      - "scripts/phase2-btrfs-layout-ci.sh"
       - ".github/workflows/phase-2-installer.yml"
   # Re-run the installed-system acceptance against every successfully rebuilt ISO,
   # not only when its VM harness changes.
@@ -99,7 +100,7 @@ jobs:
               compare="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${iso_sha}...${main_sha}")"
               # Exact paths below do not feed build-iso.yml; installer-test
               # harness updates cannot change an already built release ISO.
-              if ! jq -e '(.status == "ahead") and (.total_commits <= 10) and (.files | length > 0 and length <= 10) and all(.files[]; (.filename | startswith("docs/")) or (.filename == "scripts/smoke-installed-iso-qemu.sh") or (.filename == "scripts/phase2-firstboot.sh") or (.filename == ".github/workflows/phase-2-installer.yml"))' <<< "$compare" >/dev/null; then
+              if ! jq -e '(.status == "ahead") and (.total_commits <= 10) and (.files | length > 0 and length <= 10) and all(.files[]; (.filename | startswith("docs/")) or (.filename == "scripts/smoke-installed-iso-qemu.sh") or (.filename == "scripts/phase2-firstboot.sh") or (.filename == "scripts/phase2-btrfs-layout-ci.sh") or (.filename == ".github/workflows/phase-2-installer.yml"))' <<< "$compare" >/dev/null; then
                 echo "::error::Implicit ISO $run differs from main in code or its history cannot be proven docs-only ($iso_sha vs $main_sha). Rebuild or explicitly select a run."
                 exit 1
               fi

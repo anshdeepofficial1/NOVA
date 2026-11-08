@@ -73,14 +73,31 @@ jobs:
           echo "run_id=$run" >> "$GITHUB_OUTPUT"
           gh run view "$run" --json conclusion,headSha --jq '{conclusion,headSha}'
           [[ "$(gh run view "$run" --json conclusion --jq .conclusion)" == success ]]
-          # Never silently accept a stale ISO after main changes. A branch push
-          # must test the current main ISO; explicit run IDs are still checked.
-          iso_sha="$(gh run view "$run" --json headSha --jq .headSha)"
-          main_sha="$(gh api repos/${GITHUB_REPOSITORY}/git/ref/heads/main --jq .object.sha)"
-          if [[ "$iso_sha" != "$main_sha" ]]; then
-            echo "::error::ISO run $run uses $iso_sha, but main is $main_sha; rebuild the ISO before installed acceptance."
+          # Bind evidence to the exact successful ISO run. A workflow_run event
+          # must use its triggering build, even if main advances meanwhile.
+          # For manual/push runs, reject stale implicit latest-build selection;
+          # an explicitly requested historical build remains traceable.
+          run_json="$(gh run view "$run" --json headSha,headBranch,workflowName,event)"
+          iso_sha="$(jq -r .headSha <<< "$run_json")"
+          iso_branch="$(jq -r .headBranch <<< "$run_json")"
+          iso_workflow="$(jq -r .workflowName <<< "$run_json")"
+          [[ "$iso_workflow" == "Build NOVA ISO" && "$iso_branch" == main ]] || {
+            echo "::error::Run $run is not a Build NOVA ISO run from main."
             exit 1
+          }
+          if [[ "${{ github.event_name }}" == workflow_run ]]; then
+            [[ "$run" == "${{ github.event.workflow_run.id }}" && "$iso_sha" == "${{ github.event.workflow_run.head_sha }}" ]] || {
+              echo "::error::Triggered ISO run ID/SHA mismatch."
+              exit 1
+            }
+          elif [[ -z "${{ inputs.iso_run_id || '' }}" ]]; then
+            main_sha="$(gh api repos/${GITHUB_REPOSITORY}/git/ref/heads/main --jq .object.sha)"
+            [[ "$iso_sha" == "$main_sha" ]] || {
+              echo "::error::Implicit ISO $run is stale ($iso_sha vs main $main_sha); rebuild or explicitly select a run."
+              exit 1
+            }
           fi
+          echo "Selected immutable ISO run $run at commit $iso_sha"
       - name: Download exact tested NOVA ISO artifact
         env:
           GH_TOKEN: ${{ github.token }}

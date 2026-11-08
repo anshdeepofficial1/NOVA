@@ -65,6 +65,21 @@ if [[ -s /etc/nova-phase2-expected-fstype ]]; then
       exit 1
     }
     echo "NOVA_PHASE2_BTRFS_SUBVOLUME_OK"
+    if [[ -f /etc/nova-phase2-ci-snapshot-restore ]]; then
+      # Subvolumes and test-user data must survive the ISO-free disk reboot.
+      for mount_path in /home /.snapshots; do
+        mountpoint -q "$mount_path" || { echo "Missing persisted Btrfs mount: $mount_path"; exit 1; }
+        [[ "$(findmnt -n -o FSTYPE "$mount_path")" == btrfs ]] || exit 1
+        btrfs subvolume show "$mount_path" >/dev/null || exit 1
+      done
+      [[ "$(findmnt -n -o SOURCE /home)" == *"@home]" ]] || exit 1
+      [[ "$(findmnt -n -o SOURCE /.snapshots)" == *"@snapshots]" ]] || exit 1
+      grep -Fxq NOVA_PHASE2_HOME_COPY_OK /home/novatest/.nova-phase2-migration
+      btrfs subvolume show /.snapshots/baseline >/dev/null
+      grep -Fxq data_restore_verified /etc/nova-phase2-ci-snapshot-restore
+      echo "NOVA_PHASE2_BTRFS_LAYOUT_OK"
+      echo "NOVA_PHASE2_SNAPSHOT_RESTORE_DATA_OK"
+    fi
   fi
   echo "NOVA_PHASE2_STORAGE_POLICY_OK"
 fi

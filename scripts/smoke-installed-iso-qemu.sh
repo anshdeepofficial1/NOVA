@@ -261,7 +261,8 @@ run_one() {
   local -a secondary_args=()
   if [[ "$PRESERVE_SECONDARY" == true ]]; then
     [[ ! -e "$secondary" && ! -L "$secondary" ]] || fail "refusing to overwrite existing secondary disk: $secondary"
-    truncate -s 64M "$secondary"
+    # Nonzero randomized filler detects zeroing even away from the identity marker.
+    dd if=/dev/urandom of="$secondary" bs=1M count=64 status=none
     printf 'NOVA_PHASE2_PRESERVE_THIS_NON_TARGET_DISK\n' | dd of="$secondary" bs=1 seek=4096 conv=notrunc status=none
     sha256sum "$secondary" > "$WORK/$mode-$FILESYSTEM-nontarget.sha256"
     secondary_args=(-drive "if=virtio,format=raw,file=$secondary")

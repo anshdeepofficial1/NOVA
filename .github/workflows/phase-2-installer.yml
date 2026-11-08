@@ -73,6 +73,37 @@ jobs:
           echo "run_id=$run" >> "$GITHUB_OUTPUT"
           gh run view "$run" --json conclusion,headSha --jq '{conclusion,headSha}'
           [[ "$(gh run view "$run" --json conclusion --jq .conclusion)" == success ]]
+          # Bind evidence to the exact successful ISO run. A workflow_run event
+          # must use its triggering build, even if main advances meanwhile.
+          # For manual/push runs, reject stale implicit latest-build selection;
+          # an explicitly requested historical build remains traceable.
+          run_json="$(gh run view "$run" --json headSha,headBranch,workflowName,event)"
+          iso_sha="$(jq -r .headSha <<< "$run_json")"
+          iso_branch="$(jq -r .headBranch <<< "$run_json")"
+          iso_workflow="$(jq -r .workflowName <<< "$run_json")"
+          [[ "$iso_workflow" == "Build NOVA ISO" && "$iso_branch" == main ]] || {
+            echo "::error::Run $run is not a Build NOVA ISO run from main."
+            exit 1
+          }
+          if [[ "${{ github.event_name }}" == workflow_run ]]; then
+            [[ "$run" == "${{ github.event.workflow_run.id }}" && "$iso_sha" == "${{ github.event.workflow_run.head_sha }}" ]] || {
+              echo "::error::Triggered ISO run ID/SHA mismatch."
+              exit 1
+            }
+          elif [[ -z "${{ inputs.iso_run_id || '' }}" ]]; then
+            main_sha="$(gh api repos/${GITHUB_REPOSITORY}/git/ref/heads/main --jq .object.sha)"
+            if [[ "$iso_sha" != "$main_sha" ]]; then
+              # Documentation commits do not alter ISO bytes. Check GitHub's
+              # actual intervening files rather than rejecting a valid build.
+              compare="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${iso_sha}...${main_sha}")"
+              if ! jq -e '(.status == "ahead") and (.total_commits <= 10) and (.files | length > 0 and length <= 10) and all(.files[]; .filename | startswith("docs/"))' <<< "$compare" >/dev/null; then
+                echo "::error::Implicit ISO $run differs from main in code or its history cannot be proven docs-only ($iso_sha vs $main_sha). Rebuild or explicitly select a run."
+                exit 1
+              fi
+              echo "::notice::ISO $run at $iso_sha is equivalent to current main image (docs-only changes through $main_sha)."
+            fi
+          fi
+          echo "Selected immutable ISO run $run at commit $iso_sha"
       - name: Download exact tested NOVA ISO artifact
         env:
           GH_TOKEN: ${{ github.token }}
@@ -95,6 +126,15 @@ jobs:
             --output-dir "$RUNNER_TEMP/nova-installed" \
             --install-timeout 5400 \
             --boot-timeout 1200
+      - name: Validate real SDDM Wayland and NOVA Desktop user session
+        run: |
+          sudo bash scripts/smoke-installed-iso-qemu.sh \
+            --iso "$NOVA_ISO" \
+            --firmware uefi \
+            --graphical \
+            --output-dir "$RUNNER_TEMP/nova-installed-graphical" \
+            --install-timeout 5400 \
+            --boot-timeout 1200
       - name: Upload installation and first-boot diagnostics
         if: always()
         uses: actions/upload-artifact@v7
@@ -103,5 +143,8 @@ jobs:
           path: |
             ${{ runner.temp }}/nova-installed/*.log
             ${{ runner.temp }}/nova-installed/*-result.txt
+            ${{ runner.temp }}/nova-installed-graphical/*.log
+            ${{ runner.temp }}/nova-installed-graphical/*-result.txt
+            ${{ runner.temp }}/nova-installed-graphical/*-graphical-session.ppm
           if-no-files-found: warn
           retention-days: 14

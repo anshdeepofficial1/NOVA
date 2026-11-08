@@ -285,7 +285,61 @@ run_one() {
     if [[ -f "$boot_log" ]] && grep -Fq 'NOVA_PHASE2_GUEST_PASS' "$boot_log"; then
       # A guest pass alone can come from an older ISO without production firstboot.
       # Require the marker from the installed system before accepting this release gate.
-      if ! grep -Fxq 'NOVA_PHASE2_PRODUCTION_FIRSTBOOT_OK' "$boot_log"; then
+      # QEMU ttyS0 serial logs are CRLF-terminated. Accept exactly the marker
+      # with LF or CRLF, never a substring or a marker with extra content.
+      if ! grep -Fxq 'NOVA_PHASE2_PRODUCTION_FIRSTBOOT_OK' "$boot_log" &&
+         ! grep -Fxq 
+        echo "FAIL: installed production firstboot marker missing" >&2
+        printf 'mode=%s\nresult=FAIL\nstage=production_firstboot_unverified\n' "$mode" > "$result"
+        return 1
+      fi
+      if ! grep -Fq "NOVA_PHASE2_FIRMWARE=$mode" "$boot_log" ||
+         ! grep -Fq 'NOVA_PHASE2_ROOT_SOURCE=' "$boot_log" ||
+         ! grep -Fq 'NOVA_PHASE2_ROOT_FSTYPE=' "$boot_log"; then
+        echo "FAIL: installed guest firmware or root-filesystem evidence is missing/mismatched" >&2
+        printf 'mode=%s\nresult=FAIL\nstage=installed_boot_evidence\n' "$mode" > "$result"
+        return 1
+      fi
+      if ! wait_qemu_exit 90 "$mode guest shutdown"; then
+        printf 'mode=%s\nresult=FAIL\nstage=guest_shutdown_%s\n' "$mode" "$WAIT_REASON" > "$result"
+        return 1
+      fi
+      echo "PASS: $mode installed NOVA booted without ISO, passed guest checks and shut down cleanly"
+      printf 'mode=%s\nresult=PASS\npostinstall=verified\nshutdown=verified\n' "$mode" > "$result"
+      return 0
+    fi
+    if [[ -f "$boot_log" ]] && grep -Fq 'NOVA_PHASE2_GUEST_FAIL' "$boot_log"; then
+      echo "Guest acceptance failure:" >&2
+      tail -n 60 "$boot_log" >&2
+      printf 'mode=%s\nresult=FAIL\nstage=first_boot_checks\n' "$mode" > "$result"
+      return 1
+    fi
+    if ! kill -0 "$QEMU_PID" 2>/dev/null; then
+      wait "$QEMU_PID" 2>/dev/null || true
+      QEMU_PID=""
+      echo "Installed $mode guest stopped before acceptance" >&2
+      [[ ! -f "$boot_log" ]] || tail -n 80 "$boot_log" >&2
+      printf 'mode=%s\nresult=FAIL\nstage=early_shutdown\n' "$mode" > "$result"
+      return 1
+    fi
+    sleep 5
+    waited=$((waited+5))
+  done
+  echo "Installed $mode boot timed out" >&2
+  [[ ! -f "$boot_log" ]] || tail -n 80 "$boot_log" >&2
+  printf 'mode=%s\nresult=FAIL\nstage=boot_timeout\n' "$mode" > "$result"
+  return 1
+}
+
+modes=("$FIRMWARE")
+if [[ "$FIRMWARE" == "all" ]]; then modes=(uefi bios); fi
+failed=0
+for mode in "${modes[@]}"; do
+  if ! run_one "$mode"; then failed=$((failed+1)); fi
+done
+if (( failed > 0 )); then fail "$failed/${#modes[@]} installer and first-boot paths failed"; fi
+echo "NOVA Phase 2 disposable installer smoke PASS (${modes[*]})"
+NOVA_PHASE2_PRODUCTION_FIRSTBOOT_OK\r' "$boot_log"; then
         echo "FAIL: installed production firstboot marker missing" >&2
         printf 'mode=%s\nresult=FAIL\nstage=production_firstboot_unverified\n' "$mode" > "$result"
         return 1

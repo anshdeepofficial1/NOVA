@@ -197,7 +197,8 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
   # for clean shutdown, so this cannot bypass graphical evidence.
   echo "NOVA_PHASE2_GUEST_PASS"
   # Keep the disposable guest alive for the QEMU framebuffer capture.
-  sleep 15
+  # Allow the host to reject the initial Plasma splash and capture the desktop.
+  sleep 110
 else
   echo "NOVA_PHASE2_GUEST_PASS"
 fi

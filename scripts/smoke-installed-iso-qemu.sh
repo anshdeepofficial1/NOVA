@@ -317,7 +317,7 @@ for attempt in range(90):
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(3)
             sock.connect(sock_path)
-            sock.sendall(("screendump " + screenshot + "\\r\\n").encode())
+            sock.sendall(("screendump " + screenshot + "\r\n").encode())
             time.sleep(0.8)
         if pathlib.Path(screenshot).is_file() and pathlib.Path(screenshot).stat().st_size > 1024:
             if desktop_pixels(screenshot):

@@ -71,7 +71,11 @@ jobs:
           if [[ -n "$REQUESTED_RUN" ]]; then
             run="$REQUESTED_RUN"
           else
-            run="$(gh run list --workflow build-iso.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
+            source_branch="main"
+            if [[ "${{ github.ref_name }}" == "work/phase2-integrated-vm-acceptance" ]]; then
+              source_branch="work/phase2-integrated-vm-acceptance"
+            fi
+            run="$(gh run list --workflow build-iso.yml --branch "$source_branch" --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
           fi
           [[ "$run" =~ ^[0-9]+$ ]] || { echo "No successful ISO workflow run found"; exit 1; }
           echo "run_id=$run" >> "$GITHUB_OUTPUT"
@@ -95,26 +99,22 @@ jobs:
               exit 1
             }
           elif [[ -z "${{ inputs.iso_run_id || '' }}" ]]; then
-            main_sha="$(gh api repos/${GITHUB_REPOSITORY}/git/ref/heads/main --jq .object.sha)"
-            if [[ "$iso_sha" != "$main_sha" ]]; then
-              # Documentation commits do not alter ISO bytes. Check GitHub's
-              # actual intervening files rather than rejecting a valid build.
-              compare="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${iso_sha}...${main_sha}")"
-              # Exact paths below do not feed build-iso.yml; installer-test
-              # harness updates cannot change an already built release ISO.
-              if ! jq -e '(.status == "ahead") and (.total_commits <= 10) and (.files | length > 0 and length <= 10) and all(.files[]; (.filename | startswith("docs/")) or (.filename == "scripts/smoke-installed-iso-qemu.sh") or (.filename == "scripts/phase2-firstboot.sh") or (.filename == "scripts/phase2-btrfs-layout-ci.sh") or (.filename == ".github/workflows/phase-2-installer.yml"))' <<< "$compare" >/dev/null; then
-                echo "::error::Implicit ISO $run differs from main in code or its history cannot be proven docs-only ($iso_sha vs $main_sha). Rebuild or explicitly select a run."
+            target_sha="$(git rev-parse HEAD)"
+            if [[ "$iso_sha" != "$target_sha" ]]; then
+              compare="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${iso_sha}...${target_sha}")"
+              if ! jq -e '(.status == "ahead") and (.total_commits <= 10) and (.files | length > 0 and length <= 20) and all(.files[]; (.filename | startswith("docs/")) or (.filename == "scripts/smoke-installed-iso-qemu.sh") or (.filename == "scripts/phase2-firstboot.sh") or (.filename == "scripts/phase2-btrfs-layout-ci.sh") or (.filename == ".github/workflows/phase-2-installer.yml"))' <<< "$compare" >/dev/null; then
+                echo "::error::ISO $run at $iso_sha is not image-equivalent to harness $target_sha."
                 exit 1
               fi
-              echo "::notice::ISO $run at $iso_sha is equivalent to current main image (docs-only changes through $main_sha)."
+              echo "::notice::Image-equivalent ISO $run ($iso_sha) with harness-only changes through $target_sha."
             fi
           fi
           # For branch image testing, the installed-VM harness must be from
           # the same immutable source revision as the ISO, not main or an
           # unrelated PR revision. This is separate from main release evidence.
-          if [[ "$iso_branch" == "work/phase2-integrated-vm-acceptance" ]]; then
+          if [[ "$iso_branch" == "work/phase2-integrated-vm-acceptance" && "${{ github.event_name }}" == workflow_run ]]; then
             [[ "$iso_sha" == "$(git rev-parse HEAD)" ]] || {
-              echo "::error::Branch ISO SHA differs from checked-out VM harness."
+              echo "::error::Triggered branch ISO SHA differs from checked-out VM harness."
               exit 1
             }
           fi

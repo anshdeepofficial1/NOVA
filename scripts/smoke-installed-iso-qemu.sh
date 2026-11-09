@@ -484,6 +484,17 @@ run_one() {
       printf 'mode=%s\nresult=FAIL\nstage=early_shutdown\n' "$mode" > "$result"
       return 1
     fi
+    # Host-side liveness evidence: run #52 stopped producing guest serial after
+    # the first GUI poll. This does not alter the shipping ISO or guest timing.
+    if [[ "$GRAPHICAL" == true ]] && (( waited > 0 && waited % 60 == 0 )); then
+      echo "NOVA_PHASE2_HOST_GUI_HEARTBEAT elapsed=${waited}s qemu_pid=${QEMU_PID}"
+      ps -o pid,ppid,stat,etime,%cpu,%mem,rss,comm -p "$QEMU_PID" || true
+      if [[ -f "$boot_log" ]]; then
+        echo "NOVA_PHASE2_HOST_GUI_SERIAL_TAIL_BEGIN"
+        tail -n 12 "$boot_log" || true
+        echo "NOVA_PHASE2_HOST_GUI_SERIAL_TAIL_END"
+      fi
+    fi
     sleep 5
     waited=$((waited+5))
   done

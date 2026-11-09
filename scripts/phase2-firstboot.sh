@@ -260,7 +260,7 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
   for pid in $(pgrep -u "$uid" -f 'plasma-welcome|welcome-center' || true); do
     [[ "$pid" =~ ^[0-9]+$ ]] || continue
     echo "NOVA_PHASE2_WELCOME_PID=$pid"
-    timeout -k 1s 3s sh -c 'tr "\\0" " " < "/proc/$1/cmdline"; echo' sh "$pid" || true
+    timeout -k 1s 3s sh -c 'tr "\0" " " < "/proc/$1/cmdline"; echo' sh "$pid" || true
     timeout -k 1s 3s sh -c 'cat "/proc/$1/cgroup"' sh "$pid" || true
     timeout -k 1s 3s ps -o pid,ppid,user,comm,args -p "$pid" || true
   done
@@ -270,7 +270,7 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
     systemctl --user --no-pager list-units --all '*welcome*' '*plasma*' || true
   for dir in /etc/xdg/autostart /usr/share/xdg/autostart /home/novatest/.config/autostart; do
     [[ -d "$dir" ]] || continue
-    find "$dir" -maxdepth 1 -type f \\( -iname '*welcome*' -o -iname '*discover*' \\) -print -exec grep -E '^(Name|Exec|Hidden|OnlyShowIn|NotShowIn|X-KDE-autostart-condition)=' {} \\; 2>/dev/null || true
+    find "$dir" -maxdepth 1 -type f \( -iname '*welcome*' -o -iname '*discover*' \) -print -exec grep -E '^(Name|Exec|Hidden|OnlyShowIn|NotShowIn|X-KDE-autostart-condition)=' {} \; 2>/dev/null || true
   done
   echo "NOVA_PHASE2_WELCOME_DIAGNOSTICS_END"
   echo "NOVA_PHASE2_GRAPHICAL_SESSION_OK"

@@ -164,13 +164,23 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
   assert_binary pgrep
   assert_binary loginctl
   uid="$(id -u novatest)"
+  # Cap D-Bus/loginctl calls and the total GUI probe wall time. Run #42
+  # hung for 20 minutes after daemon health without reporting a GUI failure.
+  assert_binary timeout
   graphical_ready=0
-  for attempt in $(seq 1 150); do
+  gui_deadline=$((SECONDS + 180))
+  gui_attempt=0
+  echo "NOVA_PHASE2_GUI_WAIT_BEGIN"
+  while (( SECONDS < gui_deadline )); do
+    gui_attempt=$((gui_attempt + 1))
+    if (( gui_attempt == 1 || gui_attempt % 15 == 0 )); then
+      echo "NOVA_PHASE2_GUI_POLL attempt=$gui_attempt"
+    fi
     while read -r session_id _; do
       [[ "$session_id" =~ ^[0-9]+$ ]] || continue
-      session_name="$(loginctl show-session "$session_id" -p Name --value 2>/dev/null || true)"
-      session_type="$(loginctl show-session "$session_id" -p Type --value 2>/dev/null || true)"
-      session_active="$(loginctl show-session "$session_id" -p Active --value 2>/dev/null || true)"
+      session_name="$(timeout -k 2s 5s loginctl show-session "$session_id" -p Name --value 2>/dev/null || true)"
+      session_type="$(timeout -k 2s 5s loginctl show-session "$session_id" -p Type --value 2>/dev/null || true)"
+      session_active="$(timeout -k 2s 5s loginctl show-session "$session_id" -p Active --value 2>/dev/null || true)"
       if [[ "$session_name" == novatest && "$session_type" == wayland &&
             "$session_active" == yes ]] &&
          pgrep -u "$uid" -x kwin_wayland >/dev/null &&
@@ -180,15 +190,16 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
         echo "NOVA_PHASE2_GUI_SESSION_TYPE=$session_type"
         break
       fi
-    done < <(loginctl list-sessions --no-legend 2>/dev/null || true)
+    done < <(timeout -k 2s 6s loginctl list-sessions --no-legend 2>/dev/null || true)
     (( graphical_ready == 1 )) && break
     sleep 1
   done
   if (( graphical_ready != 1 )); then
     echo "NOVA graphical Wayland login or shell did not become ready"
-    systemctl --no-pager status display-manager.service || true
-    journalctl --no-pager -u sddm.service -n 70 || true
-    loginctl list-sessions --no-legend || true
+    timeout -k 2s 8s systemctl --no-pager status display-manager.service || true
+    timeout -k 2s 8s journalctl --no-pager -u sddm.service -n 70 || true
+    timeout -k 2s 8s journalctl --no-pager -u systemd-logind.service -n 40 || true
+    timeout -k 2s 8s loginctl list-sessions --no-legend || true
     exit 1
   fi
   echo "NOVA_PHASE2_GRAPHICAL_SESSION_OK"

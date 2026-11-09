@@ -437,7 +437,11 @@ run_one() {
         printf 'mode=%s\nresult=FAIL\nstage=installed_boot_evidence\n' "$mode" > "$result"
         return 1
       fi
-      if ! wait_qemu_exit 90 "$mode guest shutdown"; then
+      # The graphical guest deliberately remains up to 110s for settled desktop
+       # evidence. A 90s shutdown wait would falsely fail an early screenshot.
+       shutdown_budget=90
+       if [[ "$GRAPHICAL" == true ]]; then shutdown_budget=180; fi
+       if ! wait_qemu_exit "$shutdown_budget" "$mode guest shutdown"; then
         printf 'mode=%s\nresult=FAIL\nstage=guest_shutdown_%s\n' "$mode" "$WAIT_REASON" > "$result"
         return 1
       fi

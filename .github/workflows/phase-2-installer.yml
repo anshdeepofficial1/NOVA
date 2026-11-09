@@ -28,7 +28,7 @@ on:
   workflow_run:
     workflows: ["Build NOVA ISO"]
     types: [completed]
-    branches: [main]
+    branches: [main, "work/phase2-integrated-vm-acceptance"]
 
 permissions:
   contents: read
@@ -46,6 +46,8 @@ jobs:
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       - name: Install virtual machine and ISO tools
         run: |
           sudo apt-get update
@@ -83,12 +85,12 @@ jobs:
           iso_sha="$(jq -r .headSha <<< "$run_json")"
           iso_branch="$(jq -r .headBranch <<< "$run_json")"
           iso_workflow="$(jq -r .workflowName <<< "$run_json")"
-          [[ "$iso_workflow" == "Build NOVA ISO" && "$iso_branch" == main ]] || {
-            echo "::error::Run $run is not a Build NOVA ISO run from main."
+          [[ "$iso_workflow" == "Build NOVA ISO" && ( "$iso_branch" == main || "$iso_branch" == "work/phase2-integrated-vm-acceptance" ) ]] || {
+            echo "::error::Run $run is not an approved Build NOVA ISO run."
             exit 1
           }
           if [[ "${{ github.event_name }}" == workflow_run ]]; then
-            [[ "$run" == "${{ github.event.workflow_run.id }}" && "$iso_sha" == "${{ github.event.workflow_run.head_sha }}" ]] || {
+            [[ "$run" == "${{ github.event.workflow_run.id }}" && "$iso_sha" == "${{ github.event.workflow_run.head_sha }}" && "$iso_branch" == "${{ github.event.workflow_run.head_branch }}" ]] || {
               echo "::error::Triggered ISO run ID/SHA mismatch."
               exit 1
             }
@@ -106,6 +108,15 @@ jobs:
               fi
               echo "::notice::ISO $run at $iso_sha is equivalent to current main image (docs-only changes through $main_sha)."
             fi
+          fi
+          # For branch image testing, the installed-VM harness must be from
+          # the same immutable source revision as the ISO, not main or an
+          # unrelated PR revision. This is separate from main release evidence.
+          if [[ "$iso_branch" == "work/phase2-integrated-vm-acceptance" ]]; then
+            [[ "$iso_sha" == "$(git rev-parse HEAD)" ]] || {
+              echo "::error::Branch ISO SHA differs from checked-out VM harness."
+              exit 1
+            }
           fi
           echo "Selected immutable ISO run $run at commit $iso_sha"
       - name: Download exact tested NOVA ISO artifact

@@ -207,6 +207,43 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
     timeout -k 2s 8s loginctl list-sessions --no-legend || true
     exit 1
   fi
+  # The earlier root-run health probe has stopped its temporary daemon.
+  # Prove that the installed login session itself owns a working host API,
+  # rather than accepting a nova-shell process with an offline UI.
+  assert_binary runuser
+  user_service_ready=0
+  echo "NOVA_PHASE2_USER_DAEMON_WAIT_BEGIN"
+  for attempt in $(seq 1 45); do
+    if timeout -k 2s 5s runuser -u novatest -- env \
+         "XDG_RUNTIME_DIR=/run/user/$uid" \
+         "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
+         systemctl --user is-active --quiet nova-daemon.service &&
+       curl --fail --silent --max-time 2 \
+         -H 'Origin: http://tauri.localhost' \
+         -D /run/nova-phase2-user-api-headers \
+         http://127.0.0.1:47820/health > /run/nova-phase2-user-health.json &&
+       grep -Fq '"service":"nova-daemon"' /run/nova-phase2-user-health.json &&
+       grep -Fiq 'access-control-allow-origin: http://tauri.localhost' /run/nova-phase2-user-api-headers &&
+       curl --fail --silent --max-time 2 http://127.0.0.1:47820/api/system |
+         grep -Fq '"product":"NOVA OS"'; then
+      user_service_ready=1
+      break
+    fi
+    if (( attempt == 1 || attempt % 15 == 0 )); then
+      echo "NOVA_PHASE2_USER_DAEMON_POLL attempt=$attempt"
+    fi
+    sleep 1
+  done
+  if (( user_service_ready != 1 )); then
+    echo "NOVA user-session daemon or Tauri-origin API unavailable after Wayland login"
+    timeout -k 2s 8s runuser -u novatest -- env \
+      "XDG_RUNTIME_DIR=/run/user/$uid" \
+      "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
+      systemctl --user --no-pager status nova-daemon.service || true
+    timeout -k 2s 8s journalctl --no-pager "_UID=$uid" -n 50 || true
+    exit 1
+  fi
+  echo "NOVA_PHASE2_USER_DAEMON_HEALTH_OK"
   echo "NOVA_PHASE2_GRAPHICAL_SESSION_OK"
   # Emit the final acceptance marker before the screenshot grace period.
   # The host checks the screenshot before accepting this marker and waits

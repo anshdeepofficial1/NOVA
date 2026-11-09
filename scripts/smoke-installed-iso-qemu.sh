@@ -126,7 +126,8 @@ AUTOLOGIN
   GRAPHICAL_LATE='; mkdir -p /target/etc/sddm.conf.d; cp /nova-phase2-autologin.conf /target/etc/sddm.conf.d/zz-nova-phase2-ci-autologin.conf; touch /target/etc/nova-phase2-ci-graphical'
   SERVICE_AFTER="local-fs.target systemd-user-sessions.service display-manager.service"
   SERVICE_WANTED="graphical.target"
-  SERVICE_TIMEOUT=300
+  # Graphical wait (180s) + user API (45s) + screenshot grace (110s).
+  SERVICE_TIMEOUT=480
 fi
 cat > "$WORK/overlay/preseed.cfg" <<PRESEED
 d-i debian-installer/locale string en_US.UTF-8

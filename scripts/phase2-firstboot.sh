@@ -251,6 +251,28 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
     exit 1
   fi
   echo "NOVA_PHASE2_USER_DAEMON_HEALTH_OK"
+  # G2 investigation: capture the real installed guest's KDE Welcome Center
+  # launch path before changing production autostart rules. CI-only probe;
+  # never close windows or mutate the session to make a screenshot pass.
+  echo "NOVA_PHASE2_WELCOME_DIAGNOSTICS_BEGIN"
+  timeout -k 2s 8s ps -eo pid,ppid,uid,stat,args --sort=pid |
+    grep -Ei '(^ *PID|plasma-welcome|welcome-center|kded|klauncher|nova-shell|kwin_wayland)' || true
+  for pid in $(pgrep -u "$uid" -f 'plasma-welcome|welcome-center' || true); do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    echo "NOVA_PHASE2_WELCOME_PID=$pid"
+    timeout -k 1s 3s sh -c 'tr "\\0" " " < "/proc/$1/cmdline"; echo' sh "$pid" || true
+    timeout -k 1s 3s sh -c 'cat "/proc/$1/cgroup"' sh "$pid" || true
+    timeout -k 1s 3s ps -o pid,ppid,user,comm,args -p "$pid" || true
+  done
+  timeout -k 2s 8s runuser -u novatest -- env \
+    "XDG_RUNTIME_DIR=/run/user/$uid" \
+    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
+    systemctl --user --no-pager list-units --all '*welcome*' '*plasma*' || true
+  for dir in /etc/xdg/autostart /usr/share/xdg/autostart /home/novatest/.config/autostart; do
+    [[ -d "$dir" ]] || continue
+    find "$dir" -maxdepth 1 -type f \\( -iname '*welcome*' -o -iname '*discover*' \\) -print -exec grep -E '^(Name|Exec|Hidden|OnlyShowIn|NotShowIn|X-KDE-autostart-condition)=' {} \\; 2>/dev/null || true
+  done
+  echo "NOVA_PHASE2_WELCOME_DIAGNOSTICS_END"
   echo "NOVA_PHASE2_GRAPHICAL_SESSION_OK"
   # Emit the final acceptance marker before the screenshot grace period.
   # The host checks the screenshot before accepting this marker and waits

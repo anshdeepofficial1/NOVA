@@ -22,6 +22,18 @@ This ledger is **not** a certification. Do not check a gate off merely because a
 
 **Known failure:** #42 42485821022 reaches firstboot and daemon-health but times out before GUI evidence. #41 workflow returned green, but captured screenshot displayed KDE startup splash rather than settled desktop; treat visual acceptance as unproven. Latest candidate b39b99665f (bounded graphical probes and shutdown grace) is under testing in #46 42558405522; do not call passed without actual result and artifact inspection. Keep PR #13 draft until corrected evidence is green.
 
+### G2 user-facing desktop quality checks
+
+A running `nova-shell` process is **not** enough. For the installed NOVA image, inspect a settled, rendered GUI (not the KDE splash) and prove the following before calling the Phase 2 **desktop readiness** portion complete:
+
+- **Visual:** save original framebuffer captures after login at 1280×800 and 1920×1080 where supported; reviewer confirms the actual NOVA window content, legible text, unclipped layout, appropriate contrast, and no spinner/splash. Automated non-black-pixel coverage is only a **pre-filter**, not visual certification.
+- **Interaction:** check keyboard focus/tab/Enter/Escape, mouse pointer and click response, opening/closing/restarting NOVA window and returning to desktop, graceful handling of a missing daemon, and error/empty/loading feedback. For every visible action, log a real result; buttons that only say "planned" must remain explicitly labeled **not implemented**, not accepted as functional.
+- **Host integration:** confirm the packaged app connects to the installed local API, shows a truthful online/offline status, retrieves real system info, and survives daemon restart without requiring a dev server. Do not use mock data.
+- **Reliability:** cold reboot and login more than once, observe compositor/app logs and CPU/memory growth, verify clean logout, and repeat across independent disposable QEMU runs. Record actual performance measurements; never claim parity with other operating systems without controlled benchmarks.
+- **Scope:** completing this Phase 2 installed-desktop gate does **not** certify a full Mac/Windows-class application ecosystem. File manager, application launcher and global search currently contain placeholders in `apps/shell/src/App.tsx`; these must be implemented and tested in the subsequent shell/runtime roadmap before claiming equivalent features. Premium design is an explicit quality goal, not a pass label inferred from a screenshot.
+
+Required report: exact image SHA-256, source commit, test run, VM firmware, actual screenshot artifact paths, reviewer observations, startup time if measured, interaction results and outstanding limitations. If any subtest is unperformed, mark it **pending** rather than **pass**.
+
 ## Gate G3 — Shipping storage/account/swap policy (not just CI overlay)
 
 **Acceptance:** released interactive installer actually supports a safe selectable target, Btrfs `@rootfs`, persistent `@home` and `@snapshots` after reboot, correct fstab/options, swap behavior (including encrypted installation policy), user/home ownership and recovery partition expectations. Verify ext4 compatibility and UEFI+BIOS variations where supported. Run non-target preservation and no-overwrite tests in isolated images.

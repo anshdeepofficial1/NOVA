@@ -191,6 +191,11 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
         break
       fi
     done < <(timeout -k 2s 6s loginctl list-sessions --no-legend 2>/dev/null || true)
+    # Emit a heartbeat after the complete probe, so a VM timeout distinguishes
+    # a blocked loginctl/DBus query from a merely unavailable Wayland session.
+    if (( gui_attempt == 1 || gui_attempt % 15 == 0 )); then
+      echo "NOVA_PHASE2_GUI_POLL_COMPLETE attempt=$gui_attempt ready=$graphical_ready"
+    fi
     (( graphical_ready == 1 )) && break
     sleep 1
   done

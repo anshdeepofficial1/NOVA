@@ -408,6 +408,11 @@ run_one() {
     if [[ "$GRAPHICAL" == true && "$screenshot_done" == false &&
           -f "$boot_log" ]] &&
        grep -Fq 'NOVA_PHASE2_GRAPHICAL_SESSION_OK' "$boot_log"; then
+      # Let Plasma finish launching its startup applications before taking
+      # acceptance evidence. Do not dismiss popups: they must remain visible
+      # if the shipping image still launches them.
+      echo "NOVA_PHASE2_GUI_SETTLE_WAIT=15s"
+      sleep 15
       if ! capture_guest_screen "$monitor_socket" "$screenshot"; then
         echo "FAIL: real graphical session screenshot not captured" >&2
         printf 'mode=%s\nresult=FAIL\nstage=graphical_screenshot\n' "$mode" > "$result"

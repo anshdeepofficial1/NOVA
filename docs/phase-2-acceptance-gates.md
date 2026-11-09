@@ -54,4 +54,6 @@ This ledger is **not** a certification. Do not check a gate off merely because a
 
 ## Change log
 
+- 2026-11-09: Run #46 42558405522 on b39b99665f **FAILED G2** after UEFI installation, production firstboot and daemon health: artifact 13650577112 (20 files) contains `nova-installed-graphical/uefi-result.txt` with `stage=boot_timeout`; serial stops after `NOVA_PHASE2_GUI_POLL attempt=1`, without `GRAPHICAL_SESSION_OK`, `GUEST_PASS` or graphical PPM. Btrfs layout/snapshot test and non-target preservation step passed separately; source CI #249/#250 passed. Do not infer whether the guest hung inside loginctl or became CPU-starved; the old log does not distinguish them. Commit c18b6b55 adds an after-probe heartbeat to narrow the next failure. No G2 certification.
+
 - 2026-11-09: New sequential gate ledger added on PR #13 branch. No gate newly certified by writing this document.

@@ -10,6 +10,13 @@ mkdir -p "$override_dir"
 found_welcome=0
 found_notifier=0
 
+# Install stable XDG masks even when KDE's package autostart Exec is wrapped.
+# Do not disable Discover itself: only its background notification autostart.
+for name in org.kde.plasma-welcome.desktop org.kde.discover.notifier.desktop; do
+  printf '[Desktop Entry]\nType=Application\nName=NOVA startup overlay disabled\nHidden=true\n' > "$override_dir/$name"
+  echo "NOVA_DESKTOP_OVERLAY_MASK=$name"
+done
+
 # Discover and Plasma package versions differ in desktop-entry filenames.
 # Match their actual installed autostart Exec commands, not guessed filenames.
 for source_dir in /etc/xdg/autostart /usr/share/autostart; do

@@ -1,0 +1,36 @@
+#!/bin/sh
+# Prevent KDE first-run welcome and update notification windows from covering
+# NOVA Desktop on initial login. Discover remains installed and user-launchable.
+# This runs in the shipping live-build chroot after package installation, and
+# therefore applies to both live sessions and systems installed from the ISO.
+set -eu
+
+override_dir=/etc/xdg/autostart
+mkdir -p "$override_dir"
+found_welcome=0
+found_notifier=0
+
+# Discover and Plasma package versions differ in desktop-entry filenames.
+# Match their actual installed autostart Exec commands, not guessed filenames.
+for source_dir in /etc/xdg/autostart /usr/share/autostart; do
+  [ -d "$source_dir" ] || continue
+  for entry in "$source_dir"/*.desktop; do
+    [ -f "$entry" ] || continue
+    case "$(grep -E '^Exec=' "$entry" | head -n 1 || true)" in
+      *plasma-welcome*|*plasmawelcome*)
+        found_welcome=1
+        ;;
+      *DiscoverNotifier*|*discover-notifier*|*discover-notifier*)
+        found_notifier=1
+        ;;
+      *) continue ;;
+    esac
+    name="$(basename "$entry")"
+    # Never disable NOVA's own startup entries.
+    case "$name" in nova-*.desktop) continue ;; esac
+    printf '[Desktop Entry]\nType=Application\nName=Disabled KDE first-login overlay\nHidden=true\n' > "$override_dir/$name"
+    echo "NOVA_DESKTOP_OVERLAY_DISABLED=$name"
+  done
+done
+# Missing entries are legitimate on images that do not ship the KDE components.
+echo "NOVA_DESKTOP_OVERLAY_SCAN welcome=$found_welcome discover=$found_notifier"

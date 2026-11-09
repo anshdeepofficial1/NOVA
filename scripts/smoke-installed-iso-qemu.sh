@@ -290,19 +290,42 @@ import sys
 import time
 
 sock_path, screenshot = sys.argv[1:]
-for attempt in range(25):
+def desktop_pixels(path):
+    # QEMU emits binary P6 PPM. A valid file alone is insufficient: the
+    # Plasma splash captured in run 42472222973 was 99.4% black.
+    # Require a visibly rendered frame, not a transient boot splash.
+    with open(path, "rb") as stream:
+        if stream.readline().strip() != b"P6":
+            return False
+        line = stream.readline()
+        while line.startswith(b"#"):
+            line = stream.readline()
+        width, height = map(int, line.split())
+        if stream.readline().strip() != b"255":
+            return False
+        if width < 640 or height < 480:
+            return False
+        pixels = stream.read(width * height * 3)
+        if len(pixels) != width * height * 3:
+            return False
+    sampled = range(0, len(pixels), 3 * 16)
+    visible = sum(1 for i in sampled if max(pixels[i:i+3]) > 40)
+    return visible / len(sampled) >= 0.03
+
+for attempt in range(90):
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(3)
             sock.connect(sock_path)
-            sock.sendall(("screendump " + screenshot + "\r\n").encode())
-            time.sleep(2)
+            sock.sendall(("screendump " + screenshot + "\\r\\n").encode())
+            time.sleep(0.8)
         if pathlib.Path(screenshot).is_file() and pathlib.Path(screenshot).stat().st_size > 1024:
-            sys.exit(0)
-    except (OSError, TimeoutError):
+            if desktop_pixels(screenshot):
+                sys.exit(0)
+    except (OSError, TimeoutError, ValueError):
         pass
     time.sleep(0.2)
-sys.exit("QEMU did not produce a graphical screen capture")
+sys.exit("QEMU framebuffer never advanced beyond the dark splash/blank screen")
 PY
 }
 

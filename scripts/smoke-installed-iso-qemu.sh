@@ -397,7 +397,14 @@ run_one() {
     > "$OUTPUT/$mode-installed-qemu.log" 2>&1 &
   QEMU_PID=$!
   local waited=0
-  while (( waited < BOOT_TIMEOUT )); do
+  # A graphical probe already has its own bounded guest service deadline.
+  # Avoid a 20-minute silent host timeout when QEMU becomes unresponsive.
+  local boot_wait_limit="$BOOT_TIMEOUT"
+  if [[ "$GRAPHICAL" == true ]] && (( boot_wait_limit > 720 )); then
+    boot_wait_limit=720
+  fi
+  echo "NOVA_PHASE2_BOOT_WAIT_LIMIT=$boot_wait_limit mode=$mode"
+  while (( waited < boot_wait_limit )); do
     if [[ "$GRAPHICAL" == true && "$screenshot_done" == false &&
           -f "$boot_log" ]] &&
        grep -Fq 'NOVA_PHASE2_GRAPHICAL_SESSION_OK' "$boot_log"; then

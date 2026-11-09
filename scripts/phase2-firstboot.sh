@@ -173,34 +173,41 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
   echo "NOVA_PHASE2_GUI_WAIT_BEGIN"
   while (( SECONDS < gui_deadline )); do
     gui_attempt=$((gui_attempt + 1))
-    if (( gui_attempt == 1 || gui_attempt % 15 == 0 )); then
-      echo "NOVA_PHASE2_GUI_POLL attempt=$gui_attempt"
+    # During Plasma startup loginctl/DBus can be expensive or congested.
+    # Poll cheap, user-owned processes first, then ask logind only when
+    # the actual compositor AND NOVA Desktop window process both exist.
+    kwin_ready=0
+    shell_ready=0
+    if pgrep -u "$uid" -x kwin_wayland >/dev/null; then kwin_ready=1; fi
+    if pgrep -u "$uid" -x nova-shell >/dev/null; then shell_ready=1; fi
+    if (( gui_attempt == 1 || gui_attempt % 5 == 0 )); then
+      echo "NOVA_PHASE2_GUI_POLL attempt=$gui_attempt kwin=$kwin_ready shell=$shell_ready"
     fi
-    while read -r session_id _; do
-      [[ "$session_id" =~ ^[0-9]+$ ]] || continue
-      session_name="$(timeout -k 2s 5s loginctl show-session "$session_id" -p Name --value 2>/dev/null || true)"
-      session_type="$(timeout -k 2s 5s loginctl show-session "$session_id" -p Type --value 2>/dev/null || true)"
-      session_active="$(timeout -k 2s 5s loginctl show-session "$session_id" -p Active --value 2>/dev/null || true)"
-      if [[ "$session_name" == novatest && "$session_type" == wayland &&
-            "$session_active" == yes ]] &&
-         pgrep -u "$uid" -x kwin_wayland >/dev/null &&
-         pgrep -u "$uid" -x nova-shell >/dev/null; then
-        graphical_ready=1
-        echo "NOVA_PHASE2_GUI_SESSION_ID=$session_id"
-        echo "NOVA_PHASE2_GUI_SESSION_TYPE=$session_type"
-        break
-      fi
-    done < <(timeout -k 2s 6s loginctl list-sessions --no-legend 2>/dev/null || true)
-    # Emit a heartbeat after the complete probe, so a VM timeout distinguishes
-    # a blocked loginctl/DBus query from a merely unavailable Wayland session.
-    if (( gui_attempt == 1 || gui_attempt % 15 == 0 )); then
+    if (( kwin_ready == 1 && shell_ready == 1 )); then
+      # One bounded loginctl read for session metadata instead of three
+      # independent show-session DBus round-trips per session.
+      while read -r session_id _; do
+        [[ "$session_id" =~ ^[0-9]+$ ]] || continue
+        session_info="$(timeout -k 2s 6s loginctl show-session "$session_id" -p Name -p Type -p Active 2>/dev/null || true)"
+        if grep -Fxq 'Name=novatest' <<< "$session_info" &&
+           grep -Fxq 'Type=wayland' <<< "$session_info" &&
+           grep -Fxq 'Active=yes' <<< "$session_info"; then
+          graphical_ready=1
+          echo "NOVA_PHASE2_GUI_SESSION_ID=$session_id"
+          echo "NOVA_PHASE2_GUI_SESSION_TYPE=wayland"
+          break
+        fi
+      done < <(timeout -k 2s 6s loginctl list-sessions --no-legend 2>/dev/null || true)
+    fi
+    if (( gui_attempt == 1 || gui_attempt % 5 == 0 )); then
       echo "NOVA_PHASE2_GUI_POLL_COMPLETE attempt=$gui_attempt ready=$graphical_ready"
     fi
     (( graphical_ready == 1 )) && break
-    sleep 1
+    sleep 3
   done
   if (( graphical_ready != 1 )); then
     echo "NOVA graphical Wayland login or shell did not become ready"
+    timeout -k 2s 8s ps -eo pid,ppid,stat,user,comm --sort=pid | tail -n 70 || true
     timeout -k 2s 8s systemctl --no-pager status display-manager.service || true
     timeout -k 2s 8s journalctl --no-pager -u sddm.service -n 70 || true
     timeout -k 2s 8s journalctl --no-pager -u systemd-logind.service -n 40 || true

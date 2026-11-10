@@ -41,3 +41,12 @@ for source_dir in /etc/xdg/autostart /usr/share/autostart; do
 done
 # Missing entries are legitimate on images that do not ship the KDE components.
 echo "NOVA_DESKTOP_OVERLAY_SCAN welcome=$found_welcome discover=$found_notifier"
+
+# KDE's systemd-managed autostart can launch Welcome Center through this
+# generated user-unit template despite the XDG Hidden=true override.
+# Mask only Welcome Center in the shipped filesystem; keep Plasma and NOVA
+# session services available.
+mkdir -p /etc/systemd/user
+ln -sfn /dev/null /etc/systemd/user/app-org.kde.plasma-welcome@.service
+test "$(readlink /etc/systemd/user/app-org.kde.plasma-welcome@.service)" = /dev/null
+echo 'NOVA_DESKTOP_OVERLAY_SYSTEMD_MASK=app-org.kde.plasma-welcome@.service'

@@ -185,6 +185,19 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
     echo "NOVA_PHASE2_GUI_KWIN_PROBED attempt=$gui_attempt ready=$kwin_ready"
     if timeout -k 1s 4s pgrep -u "$uid" -x nova-shell >/dev/null; then shell_ready=1; fi
     echo "NOVA_PHASE2_GUI_SHELL_PROBED attempt=$gui_attempt ready=$shell_ready"
+    # Capture the first compositor-without-shell transition immediately.
+    # VM #59 stopped after this exact state, before the next polling cycle;
+    # deferred failure-only diagnostics never executed. All commands are
+    # bounded and observational (no session mutation or synthetic pass).
+    if (( kwin_ready == 1 && shell_ready == 0 && gui_attempt <= 3 )); then
+      echo "NOVA_PHASE2_GUI_SHELL_MISSING_DIAGNOSTICS_BEGIN attempt=$gui_attempt"
+      timeout -k 1s 4s ps -eo pid,ppid,stat,user,comm --sort=pid | tail -n 45 || true
+      echo "NOVA_PHASE2_GUI_SHELL_MISSING_PS_DONE attempt=$gui_attempt"
+      timeout -k 1s 4s journalctl --no-pager -u sddm.service -n 25 || true
+      echo "NOVA_PHASE2_GUI_SHELL_MISSING_SDDM_DONE attempt=$gui_attempt"
+      timeout -k 1s 4s journalctl --no-pager _UID="$uid" -n 35 || true
+      echo "NOVA_PHASE2_GUI_SHELL_MISSING_USER_JOURNAL_DONE attempt=$gui_attempt"
+    fi
     if (( gui_attempt == 1 || gui_attempt % 5 == 0 )); then
       echo "NOVA_PHASE2_GUI_POLL attempt=$gui_attempt kwin=$kwin_ready shell=$shell_ready"
     fi

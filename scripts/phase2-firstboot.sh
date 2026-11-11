@@ -251,6 +251,51 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
     exit 1
   fi
   echo "NOVA_PHASE2_USER_DAEMON_HEALTH_OK"
+  # Prove that the shipped user service recovers from an actual unexpected
+  # daemon process crash. A clean systemctl restart is insufficient evidence.
+  # Only touch the ephemeral novatest service in this isolated CI guest.
+  user_service_pid="$(timeout -k 2s 6s runuser -u novatest -- env \
+    "XDG_RUNTIME_DIR=/run/user/$uid" \
+    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
+    systemctl --user show --value -p MainPID nova-daemon.service)"
+  if [[ ! "$user_service_pid" =~ ^[1-9][0-9]*$ ]] ||
+     [[ ! -d "/proc/$user_service_pid" ]] ||
+     [[ "$(stat -c %u "/proc/$user_service_pid")" != "$uid" ]]; then
+    echo "NOVA_PHASE2_USER_DAEMON_PID_INVALID=$user_service_pid"
+    exit 1
+  fi
+  echo "NOVA_PHASE2_USER_DAEMON_CRASH_INJECTED"
+  kill -KILL "$user_service_pid"
+  recovered=0
+  for attempt in $(seq 1 30); do
+    recovered_pid="$(timeout -k 2s 6s runuser -u novatest -- env \
+      "XDG_RUNTIME_DIR=/run/user/$uid" \
+      "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
+      systemctl --user show --value -p MainPID nova-daemon.service 2>/dev/null || true)"
+    if [[ "$recovered_pid" =~ ^[1-9][0-9]*$ ]] &&
+       [[ "$recovered_pid" != "$user_service_pid" ]] &&
+       [[ -d "/proc/$recovered_pid" ]] &&
+       [[ "$(stat -c %u "/proc/$recovered_pid")" == "$uid" ]] &&
+       curl --fail --silent --max-time 2 \
+         -H 'Origin: http://tauri.localhost' \
+         -D /run/nova-phase2-recovered-api-headers \
+         http://127.0.0.1:47820/health > /run/nova-phase2-recovered-health.json &&
+       grep -Fq '"service":"nova-daemon"' /run/nova-phase2-recovered-health.json &&
+       grep -Fiq 'access-control-allow-origin: http://tauri.localhost' /run/nova-phase2-recovered-api-headers; then
+      recovered=1
+      break
+    fi
+    sleep 1
+  done
+  if (( recovered != 1 )); then
+    echo "NOVA_PHASE2_USER_DAEMON_CRASH_RECOVERY_FAILED"
+    timeout -k 2s 8s runuser -u novatest -- env \
+      "XDG_RUNTIME_DIR=/run/user/$uid" \
+      "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
+      systemctl --user --no-pager status nova-daemon.service || true
+    exit 1
+  fi
+  echo "NOVA_PHASE2_USER_DAEMON_CRASH_RECOVERY_OK"
   # G2 investigation: capture the real installed guest's KDE Welcome Center
   # launch path before changing production autostart rules. CI-only probe;
   # never close windows or mutate the session to make a screenshot pass.

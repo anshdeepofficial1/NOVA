@@ -362,10 +362,16 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
   # Emit the final acceptance marker before the screenshot grace period.
   # The host checks the screenshot before accepting this marker and waits
   # for clean shutdown, so this cannot bypass graphical evidence.
-  # Re-emit firmware evidence after startup chatter: UEFI kernel printk can\n  # splice into the initial serial line (observed VM run 43035665380).\n  echo "NOVA_PHASE2_FIRMWARE=$firmware"\n  echo "NOVA_PHASE2_GUEST_PASS"
+  # Re-emit firmware evidence after startup chatter: UEFI kernel printk can
+  # splice into the initial serial line (observed VM run 43035665380).
+  echo "NOVA_PHASE2_FIRMWARE=$firmware"
+  echo "NOVA_PHASE2_GUEST_PASS"
   # Keep the disposable guest alive for the QEMU framebuffer capture.
   # Allow the host to reject the initial Plasma splash and capture the desktop.
   sleep 110
 else
-  # Re-emit firmware evidence after startup chatter: UEFI kernel printk can\n  # splice into the initial serial line (observed VM run 43035665380).\n  echo "NOVA_PHASE2_FIRMWARE=$firmware"\n  echo "NOVA_PHASE2_GUEST_PASS"
+  # Re-emit firmware evidence after startup chatter: UEFI kernel printk can
+  # splice into the initial serial line (observed VM run 43035665380).
+  echo "NOVA_PHASE2_FIRMWARE=$firmware"
+  echo "NOVA_PHASE2_GUEST_PASS"
 fi

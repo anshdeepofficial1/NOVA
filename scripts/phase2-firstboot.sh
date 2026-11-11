@@ -178,8 +178,13 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
     # the actual compositor AND NOVA Desktop window process both exist.
     kwin_ready=0
     shell_ready=0
-    if pgrep -u "$uid" -x kwin_wayland >/dev/null; then kwin_ready=1; fi
-    if pgrep -u "$uid" -x nova-shell >/dev/null; then shell_ready=1; fi
+    # Run #58 stalled after the first poll without a second heartbeat.
+    # Bound each /proc scan and expose exactly where the guest stops.
+    echo "NOVA_PHASE2_GUI_PROBE_BEGIN attempt=$gui_attempt"
+    if timeout -k 1s 4s pgrep -u "$uid" -x kwin_wayland >/dev/null; then kwin_ready=1; fi
+    echo "NOVA_PHASE2_GUI_KWIN_PROBED attempt=$gui_attempt ready=$kwin_ready"
+    if timeout -k 1s 4s pgrep -u "$uid" -x nova-shell >/dev/null; then shell_ready=1; fi
+    echo "NOVA_PHASE2_GUI_SHELL_PROBED attempt=$gui_attempt ready=$shell_ready"
     if (( gui_attempt == 1 || gui_attempt % 5 == 0 )); then
       echo "NOVA_PHASE2_GUI_POLL attempt=$gui_attempt kwin=$kwin_ready shell=$shell_ready"
     fi

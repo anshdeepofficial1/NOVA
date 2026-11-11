@@ -273,6 +273,20 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
     find "$dir" -maxdepth 1 -type f \( -iname '*welcome*' -o -iname '*discover*' \) -print -exec grep -E '^(Name|Exec|Hidden|OnlyShowIn|NotShowIn|X-KDE-autostart-condition)=' {} \; 2>/dev/null || true
   done
   echo "NOVA_PHASE2_WELCOME_DIAGNOSTICS_END"
+  # This is a shipping-image acceptance assertion, not a cosmetic screenshot
+  # filter: KDE Welcome has obscured the real NOVA workspace in earlier green
+  # runs. Confirm the installed root carries the production systemd mask and
+  # that no welcome application survived login before claiming GUI readiness.
+  welcome_mask=/etc/systemd/user/app-org.kde.plasma-welcome@.service
+  if [[ ! -L "$welcome_mask" ]] || [[ "$(readlink "$welcome_mask")" != /dev/null ]]; then
+    echo "NOVA_PHASE2_WELCOME_MASK_MISSING path=$welcome_mask"
+    exit 1
+  fi
+  if pgrep -u "$uid" -x plasma-welcome >/dev/null; then
+    echo "NOVA_PHASE2_WELCOME_OVERLAY_ACTIVE"
+    exit 1
+  fi
+  echo "NOVA_PHASE2_WELCOME_SUPPRESSED_OK"
   echo "NOVA_PHASE2_GRAPHICAL_SESSION_OK"
   # Emit the final acceptance marker before the screenshot grace period.
   # The host checks the screenshot before accepting this marker and waits

@@ -47,6 +47,12 @@ echo "NOVA_DESKTOP_OVERLAY_SCAN welcome=$found_welcome discover=$found_notifier"
 # Mask only Welcome Center in the shipped filesystem; keep Plasma and NOVA
 # session services available.
 mkdir -p /etc/systemd/user
-ln -sfn /dev/null /etc/systemd/user/app-org.kde.plasma-welcome@.service
-test "$(readlink /etc/systemd/user/app-org.kde.plasma-welcome@.service)" = /dev/null
-echo 'NOVA_DESKTOP_OVERLAY_SYSTEMD_MASK=app-org.kde.plasma-welcome@.service'
+# The exact unit observed in a real installed guest was
+# app-org.kde.plasma\x2dwelcome@<instance>.service (systemd-escaped '-').
+# Mask that template as well as the human-readable KDE naming variant;
+# otherwise the old mask does not match the generated instance unit.
+for unit in 'app-org.kde.plasma-welcome@.service' 'app-org.kde.plasma\x2dwelcome@.service'; do
+  ln -sfn /dev/null "/etc/systemd/user/$unit"
+  test "$(readlink "/etc/systemd/user/$unit")" = /dev/null
+  echo "NOVA_DESKTOP_OVERLAY_SYSTEMD_MASK=$unit"
+done

@@ -327,6 +327,14 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
     echo "NOVA_PHASE2_WELCOME_MASK_MISSING path=$welcome_mask"
     exit 1
   fi
+  # KDE's generated unit is escaped on the installed guest. The unescaped
+  # mask alone did not prevent the Welcome Center overlay in VM #55.
+  escaped_welcome_mask='/etc/systemd/user/app-org.kde.plasma\x2dwelcome@.service'
+  if [[ ! -L "$escaped_welcome_mask" ]] || [[ "$(readlink "$escaped_welcome_mask")" != /dev/null ]]; then
+    echo "NOVA_PHASE2_ESCAPED_WELCOME_MASK_MISSING path=$escaped_welcome_mask"
+    exit 1
+  fi
+  echo "NOVA_PHASE2_ESCAPED_WELCOME_MASK_OK"
   if pgrep -u "$uid" -x plasma-welcome >/dev/null; then
     echo "NOVA_PHASE2_WELCOME_OVERLAY_ACTIVE"
     exit 1

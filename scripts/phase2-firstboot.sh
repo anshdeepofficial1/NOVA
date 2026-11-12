@@ -282,14 +282,17 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
     echo "NOVA_PHASE2_USER_DAEMON_PID_INVALID=$user_service_pid"
     exit 1
   fi
-  echo "NOVA_PHASE2_USER_DAEMON_CRASH_INJECTED"
+  echo "NOVA_PHASE2_USER_DAEMON_CRASH_INJECTED pid=$user_service_pid"
   kill -KILL "$user_service_pid"
+  echo "NOVA_PHASE2_USER_DAEMON_CRASH_SIGNAL_SENT"
   recovered=0
   for attempt in $(seq 1 30); do
+    echo "NOVA_PHASE2_USER_DAEMON_RECOVERY_POLL_BEGIN attempt=$attempt"
     recovered_pid="$(timeout -k 2s 6s runuser -u novatest -- env \
       "XDG_RUNTIME_DIR=/run/user/$uid" \
       "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
       systemctl --user show --value -p MainPID nova-daemon.service 2>/dev/null || true)"
+    echo "NOVA_PHASE2_USER_DAEMON_RECOVERY_PID attempt=$attempt pid=$recovered_pid"
     if [[ "$recovered_pid" =~ ^[1-9][0-9]*$ ]] &&
        [[ "$recovered_pid" != "$user_service_pid" ]] &&
        [[ -d "/proc/$recovered_pid" ]] &&

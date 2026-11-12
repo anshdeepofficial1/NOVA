@@ -498,6 +498,30 @@ run_one() {
     sleep 5
     waited=$((waited+5))
   done
+  # A failed graphical boot still needs visual evidence. Capture the raw
+  # framebuffer before cleanup, even if it is black or a login screen.
+  # This diagnostic never sets screenshot_done or changes the FAIL result.
+  if [[ "$GRAPHICAL" == true && "$screenshot_done" == false ]]; then
+    echo "NOVA_PHASE2_FAILED_GUI_FRAMEBUFFER_BEGIN"
+    timeout -k 2s 12s python3 - "$monitor_socket" "$screenshot" <<'PY' || true
+import pathlib
+import socket
+import sys
+import time
+
+sock_path, screenshot = sys.argv[1:]
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+    sock.settimeout(3)
+    sock.connect(sock_path)
+    sock.sendall(("screendump " + screenshot + "\r\n").encode())
+    for _ in range(30):
+        time.sleep(0.2)
+        if pathlib.Path(screenshot).is_file():
+            print("Failed-boot framebuffer bytes:", pathlib.Path(screenshot).stat().st_size)
+            break
+PY
+    echo "NOVA_PHASE2_FAILED_GUI_FRAMEBUFFER_END"
+  fi
   echo "Installed $mode boot timed out" >&2
   [[ ! -f "$boot_log" ]] || tail -n 80 "$boot_log" >&2
   printf 'mode=%s\nresult=FAIL\nstage=boot_timeout\n' "$mode" > "$result"

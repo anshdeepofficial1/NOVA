@@ -127,7 +127,7 @@ AUTOLOGIN
   SERVICE_AFTER="local-fs.target systemd-user-sessions.service display-manager.service"
   SERVICE_WANTED="graphical.target"
   # Graphical wait (180s) + user API (45s) + screenshot grace (110s).
-  SERVICE_TIMEOUT=480
+  SERVICE_TIMEOUT=600
 fi
 cat > "$WORK/overlay/preseed.cfg" <<PRESEED
 d-i debian-installer/locale string en_US.UTF-8
@@ -384,6 +384,7 @@ run_one() {
   echo "Installer exited, now booting $mode virtual disk with ISO REMOVED"
   local monitor_socket="" screenshot="$OUTPUT/$mode-graphical-session.ppm"
   local screenshot_done=false
+  local offline_screenshot_done=false
   local graphics_args=(-vga std -display none)
   local serial_args=(-serial "file:$boot_log")
   if [[ "$GRAPHICAL" == true ]]; then
@@ -409,6 +410,16 @@ run_one() {
   fi
   echo "NOVA_PHASE2_BOOT_WAIT_LIMIT=$boot_wait_limit mode=$mode"
   while (( waited < boot_wait_limit )); do
+    if [[ "$GRAPHICAL" == true && "$offline_screenshot_done" == false && -f "$boot_log" ]] &&
+       grep -Fxq 'NOVA_PHASE2_OFFLINE_FRAME_READY' "$boot_log"; then
+      if grep -Fq 'NOVA_PHASE2_OFFLINE_FRAME_WINDOW_END' "$boot_log" ||
+         ! timeout -k 2s 25s bash -c "$(declare -f capture_guest_screen); capture_guest_screen \"\$1\" \"\$2\"" bash "$monitor_socket" "$OUTPUT/$mode-graphical-offline.ppm" ||
+         grep -Fq 'NOVA_PHASE2_OFFLINE_FRAME_WINDOW_END' "$boot_log"; then
+        printf 'mode=%s\nresult=FAIL\nstage=offline_framebuffer\n' "$mode" > "$result"
+        return 1
+      fi
+      offline_screenshot_done=true
+    fi
     if [[ "$GRAPHICAL" == true && "$screenshot_done" == false &&
           -f "$boot_log" ]] &&
        grep -Fq 'NOVA_PHASE2_GRAPHICAL_SESSION_OK' "$boot_log"; then
@@ -443,14 +454,14 @@ run_one() {
         done
       fi
       if [[ "$GRAPHICAL" == true ]]; then
-        for evidence in NOVA_PHASE2_DEDICATED_PROBE_UART=ttyS1 NOVA_PHASE2_GUI_SESSION_TYPE=wayland NOVA_PHASE2_USER_DAEMON_HEALTH_OK NOVA_PHASE2_USER_DAEMON_CRASH_RECOVERY_OK NOVA_PHASE2_WELCOME_SUPPRESSED_OK NOVA_PHASE2_GRAPHICAL_SESSION_OK NOVA_PHASE2_GUEST_PASS; do
+        for evidence in NOVA_PHASE2_DEDICATED_PROBE_UART=ttyS1 NOVA_PHASE2_GUI_SESSION_TYPE=wayland NOVA_PHASE2_USER_DAEMON_HEALTH_OK NOVA_PHASE2_USER_DAEMON_CRASH_RECOVERY_OK NOVA_PHASE2_USER_DAEMON_OUTAGE_OK NOVA_PHASE2_OFFLINE_FRAME_READY NOVA_PHASE2_USER_DAEMON_OUTAGE_RECOVERY_OK NOVA_PHASE2_WELCOME_SUPPRESSED_OK NOVA_PHASE2_GRAPHICAL_SESSION_OK NOVA_PHASE2_GUEST_PASS; do
           if ! grep -Fxq "$evidence" "$boot_log" && ! grep -Fxq "$evidence$(printf '\015')" "$boot_log"; then
             echo "FAIL: missing exact graphical acceptance marker: $evidence" >&2
             printf 'mode=%s\nresult=FAIL\nstage=graphical_marker_missing\n' "$mode" > "$result"
             return 1
           fi
         done
-        if [[ "$screenshot_done" != true ]]; then
+        if [[ "$screenshot_done" != true || "$offline_screenshot_done" != true ]]; then
           echo "FAIL: no verified graphical session screenshot" >&2
           printf 'mode=%s\nresult=FAIL\nstage=graphical_evidence\n' "$mode" > "$result"
           return 1

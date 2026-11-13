@@ -102,7 +102,8 @@ jobs:
             target_sha="$(git rev-parse HEAD)"
             if [[ "$iso_sha" != "$target_sha" ]]; then
               compare="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${iso_sha}...${target_sha}")"
-              if ! jq -e '(.status == "ahead") and (.total_commits <= 10) and (.files | length > 0 and length <= 20) and all(.files[]; (.filename | startswith("docs/")) or (.filename == "scripts/smoke-installed-iso-qemu.sh") or (.filename == "scripts/phase2-firstboot.sh") or (.filename == "scripts/phase2-btrfs-layout-ci.sh") or (.filename == ".github/workflows/phase-2-installer.yml"))' <<< "$compare" >/dev/null; then
+              # Allow a bounded series of harness-only revisions; the full changed-file allowlist still applies.
+              if ! jq -e '(.status == "ahead") and (.total_commits <= 20) and (.files | length > 0 and length <= 20) and all(.files[]; (.filename | startswith("docs/")) or (.filename == "scripts/smoke-installed-iso-qemu.sh") or (.filename == "scripts/phase2-firstboot.sh") or (.filename == "scripts/phase2-btrfs-layout-ci.sh") or (.filename == ".github/workflows/phase-2-installer.yml"))' <<< "$compare" >/dev/null; then
                 echo "::error::ISO $run at $iso_sha is not image-equivalent to harness $target_sha."
                 exit 1
               fi
@@ -180,5 +181,6 @@ jobs:
             ${{ runner.temp }}/nova-installed-graphical/*.log
             ${{ runner.temp }}/nova-installed-graphical/*-result.txt
             ${{ runner.temp }}/nova-installed-graphical/*-graphical-session.ppm
+            ${{ runner.temp }}/nova-installed-graphical/*-graphical-offline.ppm
           if-no-files-found: warn
           retention-days: 14

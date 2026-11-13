@@ -353,6 +353,16 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
     exit 1
   fi
   echo "NOVA_PHASE2_USER_DAEMON_OUTAGE_OK"
+  # The packaged UI polls every 10 seconds. Hold the real outage long
+  # enough for the host to capture its offline state without altering the UI.
+  sleep 20
+  echo "NOVA_PHASE2_OFFLINE_FRAME_READY"
+  sleep 45
+  if curl --fail --silent --max-time 2 http://127.0.0.1:47820/health >/dev/null; then
+    echo "NOVA_PHASE2_OUTAGE_ENDED_PREMATURELY"
+    exit 1
+  fi
+  echo "NOVA_PHASE2_OFFLINE_FRAME_WINDOW_END"
   user_daemon_ctl start
   outage_recovered=0
   for attempt in $(seq 1 30); do

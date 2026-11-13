@@ -334,6 +334,45 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
     exit 1
   fi
   echo "NOVA_PHASE2_USER_DAEMON_CRASH_RECOVERY_OK"
+  # Dedicated G2 outage probe: keep the real shell alive while its user API
+  # is deliberately stopped. This proves transport recovery, not visual UI
+  # feedback (which still requires separate framebuffer inspection).
+  user_daemon_ctl() {
+    timeout -k 2s 8s runuser -u novatest -- env \
+      "XDG_RUNTIME_DIR=/run/user/$uid" \
+      "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
+      systemctl --user "$@" nova-daemon.service
+  }
+  user_daemon_ctl stop
+  if curl --fail --silent --max-time 2 http://127.0.0.1:47820/health >/dev/null; then
+    echo "NOVA_PHASE2_USER_DAEMON_OUTAGE_FAILED"
+    exit 1
+  fi
+  if ! pgrep -u "$uid" -x nova-shell >/dev/null; then
+    echo "NOVA_PHASE2_SHELL_EXITED_DURING_OUTAGE"
+    exit 1
+  fi
+  echo "NOVA_PHASE2_USER_DAEMON_OUTAGE_OK"
+  user_daemon_ctl start
+  outage_recovered=0
+  for attempt in $(seq 1 30); do
+    if curl --fail --silent --max-time 2 \
+         -H 'Origin: http://tauri.localhost' \
+         -D /run/nova-phase2-outage-api-headers \
+         http://127.0.0.1:47820/health > /run/nova-phase2-outage-health.json &&
+       grep -Fq '"service":"nova-daemon"' /run/nova-phase2-outage-health.json &&
+       grep -Fiq 'access-control-allow-origin: http://tauri.localhost' /run/nova-phase2-outage-api-headers &&
+       pgrep -u "$uid" -x nova-shell >/dev/null; then
+      outage_recovered=1
+      break
+    fi
+    sleep 1
+  done
+  if (( outage_recovered != 1 )); then
+    echo "NOVA_PHASE2_USER_DAEMON_OUTAGE_RECOVERY_FAILED"
+    exit 1
+  fi
+  echo "NOVA_PHASE2_USER_DAEMON_OUTAGE_RECOVERY_OK"
   # G2 investigation: capture the real installed guest's KDE Welcome Center
   # launch path before changing production autostart rules. CI-only probe;
   # never close windows or mutate the session to make a screenshot pass.

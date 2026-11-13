@@ -2,7 +2,17 @@
 # CI-only first-boot probe. Installed exclusively into disposable QEMU disks.
 set -Eeuo pipefail
 
-exec > /dev/ttyS0 2>&1
+# Keep the graphical probe off the kernel/login console. The serial getty
+# reconfigures ttyS0 while Plasma starts; previous runs lost all probe output
+# immediately after its login prompt. ttyS1 is a dedicated CI-only UART.
+if [[ -f /etc/nova-phase2-ci-graphical ]]; then
+  test -c /dev/ttyS1
+  timeout -k 1s 5s stty -F /dev/ttyS1 115200 raw -echo clocal -crtscts
+  exec > /dev/ttyS1 2>&1
+  echo "NOVA_PHASE2_DEDICATED_PROBE_UART=ttyS1"
+else
+  exec > /dev/ttyS0 2>&1
+fi
 
 finish() {
   status="${1:-$?}"
@@ -128,7 +138,14 @@ echo "NOVA_PHASE2_DESKTOP_PACKAGES_OK"
 
 # Verify the installed host API responds. No development Vite server is used.
 log=/run/nova-phase2-daemon.log
-/usr/local/bin/nova-daemon > "$log" 2>&1 &
+# Avoid racing the actual graphical user service for its production port.
+# The temporary root probe is isolated; the graphical checks below still
+# require the real user service on its unchanged production port 47820.
+probe_port=47820
+if [[ -f /etc/nova-phase2-ci-graphical ]]; then
+  probe_port=47821
+fi
+NOVA_BIND="127.0.0.1:$probe_port" /usr/local/bin/nova-daemon > "$log" 2>&1 &
 daemon_pid=$!
 stop_daemon() {
   kill "$daemon_pid" 2>/dev/null || true
@@ -137,7 +154,7 @@ stop_daemon() {
 trap 'status=$?; stop_daemon; finish "$status"' EXIT
 ready=0
 for attempt in $(seq 1 30); do
-  if curl --fail --silent --show-error --max-time 2 http://127.0.0.1:47820/health >/run/nova-phase2-health.json 2>/dev/null; then
+  if curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:$probe_port/health" >/run/nova-phase2-health.json 2>/dev/null; then
     ready=1
     break
   fi

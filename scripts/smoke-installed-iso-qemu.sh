@@ -385,13 +385,17 @@ run_one() {
   local monitor_socket="" screenshot="$OUTPUT/$mode-graphical-session.ppm"
   local screenshot_done=false
   local graphics_args=(-vga std -display none)
+  local serial_args=(-serial "file:$boot_log")
   if [[ "$GRAPHICAL" == true ]]; then
+    # Keep the kernel console/getty and the CI probe on distinct UARTs.
+    # Preserve both logs, but accept markers only from the dedicated probe.
+    serial_args=(-serial "file:$OUTPUT/$mode-installed-console.log" -serial "file:$boot_log")
     monitor_socket="$OUTPUT/$mode-graphical-monitor.sock"
     graphics_args=(-vga virtio -display none -vnc 127.0.0.1:6
                    -monitor "unix:$monitor_socket,server=on,wait=off")
   fi
   "$QEMU" -machine q35 -accel "$ACCEL" -cpu max -m "$RAM_MIB" -smp "$CPUS" "${graphics_args[@]}" \
-    -serial "file:$boot_log" -no-reboot -boot order=c \
+    "${serial_args[@]}" -no-reboot -boot order=c \
     -drive "if=virtio,format=qcow2,file=$disk" "${secondary_args[@]}" \
     -netdev user,id=net0 -device virtio-net-pci,netdev=net0 "${FW_ARGS[@]}" \
     > "$OUTPUT/$mode-installed-qemu.log" 2>&1 &
@@ -438,10 +442,19 @@ run_one() {
           fi
         done
       fi
-      if [[ "$GRAPHICAL" == true && "$screenshot_done" != true ]]; then
-        echo "FAIL: no verified graphical session screenshot" >&2
-        printf 'mode=%s\nresult=FAIL\nstage=graphical_evidence\n' "$mode" > "$result"
-        return 1
+      if [[ "$GRAPHICAL" == true ]]; then
+        for evidence in NOVA_PHASE2_DEDICATED_PROBE_UART=ttyS1 NOVA_PHASE2_GUI_SESSION_TYPE=wayland NOVA_PHASE2_USER_DAEMON_HEALTH_OK NOVA_PHASE2_USER_DAEMON_CRASH_RECOVERY_OK NOVA_PHASE2_WELCOME_SUPPRESSED_OK NOVA_PHASE2_GRAPHICAL_SESSION_OK NOVA_PHASE2_GUEST_PASS; do
+          if ! grep -Fxq "$evidence" "$boot_log" && ! grep -Fxq "$evidence$(printf '\015')" "$boot_log"; then
+            echo "FAIL: missing exact graphical acceptance marker: $evidence" >&2
+            printf 'mode=%s\nresult=FAIL\nstage=graphical_marker_missing\n' "$mode" > "$result"
+            return 1
+          fi
+        done
+        if [[ "$screenshot_done" != true ]]; then
+          echo "FAIL: no verified graphical session screenshot" >&2
+          printf 'mode=%s\nresult=FAIL\nstage=graphical_evidence\n' "$mode" > "$result"
+          return 1
+        fi
       fi
       if ! grep -Fq "NOVA_PHASE2_FIRMWARE=$mode" "$boot_log" ||
          ! grep -Fq 'NOVA_PHASE2_ROOT_SOURCE=' "$boot_log" ||

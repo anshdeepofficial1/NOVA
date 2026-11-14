@@ -6,6 +6,10 @@ set -Eeuo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 ISO="$ROOT/os/debian-live/live-image-amd64.hybrid.iso"
 FIRMWARE="uefi"
+GRAPHICAL=false
+FILESYSTEM="ext4"
+PRESERVE_SECONDARY=false
+BTRFS_LAYOUT=false
 OUTPUT="$ROOT/os/debian-live/validation/installed"
 INSTALL_TIMEOUT=5400
 BOOT_TIMEOUT=1200
@@ -20,6 +24,10 @@ usage() {
 Usage: scripts/smoke-installed-iso-qemu.sh [options]
  --iso PATH               NOVA ISO (defaults to build output)
  --firmware uefi|bios|all  QEMU installation mode (default: uefi)
+ --graphical              Verify a real SDDM/Wayland/NOVA Desktop user session
+ --filesystem ext4|btrfs  Installed root filesystem (CI only; default ext4)
+ --preserve-secondary     Verify second writable non-target disk unchanged
+ --btrfs-layout           CI-only persistent subvolumes and snapshot restore
  --output-dir DIR         Reports, logs and disposable qcow2 disks
  --install-timeout N      Installer seconds (default: 5400)
  --boot-timeout N         Installed-system seconds (default: 1200)
@@ -35,6 +43,10 @@ while (( $# )); do
   case "$1" in
     --iso) ISO="$2"; shift 2 ;;
     --firmware) FIRMWARE="$2"; shift 2 ;;
+    --graphical) GRAPHICAL=true; shift ;;
+    --filesystem) FILESYSTEM="$2"; shift 2 ;;
+    --preserve-secondary) PRESERVE_SECONDARY=true; shift ;;
+    --btrfs-layout) BTRFS_LAYOUT=true; shift ;;
     --output-dir) OUTPUT="$2"; shift 2 ;;
     --install-timeout) INSTALL_TIMEOUT="$2"; shift 2 ;;
     --boot-timeout) BOOT_TIMEOUT="$2"; shift 2 ;;
@@ -43,11 +55,13 @@ while (( $# )); do
   esac
 done
 [[ "$FIRMWARE" == "uefi" || "$FIRMWARE" == "bios" || "$FIRMWARE" == "all" ]] || fail "invalid firmware"
+[[ "$FILESYSTEM" == ext4 || "$FILESYSTEM" == btrfs ]] || fail "invalid filesystem"
+[[ "$BTRFS_LAYOUT" != true || "$FILESYSTEM" == btrfs ]] || fail "--btrfs-layout requires --filesystem btrfs"
 for number in "$INSTALL_TIMEOUT" "$BOOT_TIMEOUT"; do
   [[ "$number" =~ ^[1-9][0-9]*$ ]] || fail "timeouts must be positive integers"
 done
 [[ -s "$ISO" && -s "$ISO.sha256" ]] || fail "ISO or checksum missing"
-for tool in "$QEMU" qemu-img xorriso sha256sum cpio gzip openssl timeout grep stat mktemp; do
+for tool in "$QEMU" qemu-img xorriso sha256sum cpio gzip openssl timeout grep stat mktemp python3; do
   command -v "$tool" >/dev/null || fail "missing dependency: $tool"
 done
 ( cd "$(dirname -- "$ISO")" && sha256sum -c "$(basename -- "$ISO.sha256")" ) || fail "ISO checksum mismatch"
@@ -90,6 +104,31 @@ echo "Installer boot assets: $INSTALLER and $INITRD"
 # Test-only password: ephemeral machine, no external accounts or production secrets.
 PASSWORD_HASH="$(openssl passwd -6 -salt nova-phase2-ci-2026 NOVA-QEMU-Disposable)"
 mkdir -p "$WORK/overlay"
+PARTMAN_DISKS="/dev/vda "
+if [[ "$PRESERVE_SECONDARY" == true ]]; then PARTMAN_DISKS="/dev/vda /dev/vdb "; fi
+LAYOUT_LATE=""
+if [[ "$BTRFS_LAYOUT" == true ]]; then
+  LAYOUT_LATE='; cp /nova-phase2-btrfs-layout-ci.sh /target/usr/local/sbin/nova-phase2-btrfs-layout-ci.sh; chmod 0700 /target/usr/local/sbin/nova-phase2-btrfs-layout-ci.sh; in-target /usr/local/sbin/nova-phase2-btrfs-layout-ci.sh'
+fi
+GRAPHICAL_LATE=""
+SERVICE_AFTER="local-fs.target systemd-user-sessions.service"
+SERVICE_WANTED="multi-user.target"
+SERVICE_TIMEOUT=180
+if [[ "$GRAPHICAL" == true ]]; then
+  # The only passwordless GUI login is inside a throwaway CI guest, never
+  # shipped in the NOVA ISO or installed onto any physical disk.
+  cat > "$WORK/overlay/nova-phase2-autologin.conf" <<'AUTOLOGIN'
+[Autologin]
+User=novatest
+Session=plasma.desktop
+Relogin=false
+AUTOLOGIN
+  GRAPHICAL_LATE='; mkdir -p /target/etc/sddm.conf.d; cp /nova-phase2-autologin.conf /target/etc/sddm.conf.d/zz-nova-phase2-ci-autologin.conf; touch /target/etc/nova-phase2-ci-graphical'
+  SERVICE_AFTER="local-fs.target systemd-user-sessions.service display-manager.service"
+  SERVICE_WANTED="graphical.target"
+  # Graphical wait (180s) + user API (45s) + screenshot grace (110s).
+  SERVICE_TIMEOUT=600
+fi
 cat > "$WORK/overlay/preseed.cfg" <<PRESEED
 d-i debian-installer/locale string en_US.UTF-8
 d-i keyboard-configuration/xkb-keymap select us
@@ -110,9 +149,10 @@ d-i passwd/user-fullname string NOVA CI Tester
 d-i passwd/username string novatest
 d-i passwd/user-password-crypted password $PASSWORD_HASH
 d-i user-setup/allow-password-weak boolean true
-d-i partman/early_command string test "\$(list-devices disk | tr '\\n' ' ')" = "/dev/vda " && echo NOVA_PHASE2_PRESEED_LOADED >/dev/ttyS0
+d-i partman/early_command string test "\$(list-devices disk | tr '\\n' ' ')" = "$PARTMAN_DISKS" && echo NOVA_PHASE2_PRESEED_LOADED >/dev/ttyS0
 d-i partman-auto/disk string /dev/vda
 d-i partman-auto/method string regular
+d-i partman/default_filesystem string $FILESYSTEM
 d-i partman-auto/choose_recipe select atomic
 d-i partman-partitioning/choose_label select gpt
 d-i partman-partitioning/default_label string gpt
@@ -127,23 +167,26 @@ tasksel tasksel/first multiselect
 d-i grub-installer/only_debian boolean true
 d-i grub-installer/with_other_os boolean false
 d-i grub-installer/bootdev string /dev/vda
-d-i preseed/late_command string set -e; cp /nova-phase2-firstboot.sh /target/usr/local/sbin/nova-phase2-firstboot.sh; chmod 0700 /target/usr/local/sbin/nova-phase2-firstboot.sh; cp /nova-phase2-firstboot.service /target/etc/systemd/system/nova-phase2-firstboot.service; touch /target/etc/nova-phase2-ci-only; in-target systemctl enable nova-phase2-firstboot.service; mkdir -p /target/etc/default/grub.d; printf 'GRUB_CMDLINE_LINUX_DEFAULT="console=tty0 console=ttyS0,115200n8"\\n' > /target/etc/default/grub.d/nova-phase2-ci.cfg; in-target update-grub; test -s /target/boot/grub/grub.cfg; echo NOVA_PHASE2_INSTALL_COMPLETE >/dev/ttyS0
+d-i preseed/late_command string set -e; cp /nova-phase2-firstboot.sh /target/usr/local/sbin/nova-phase2-firstboot.sh; chmod 0700 /target/usr/local/sbin/nova-phase2-firstboot.sh; cp /nova-phase2-firstboot.service /target/etc/systemd/system/nova-phase2-firstboot.service; touch /target/etc/nova-phase2-ci-only; in-target systemctl enable nova-phase2-firstboot.service; mkdir -p /target/etc/default/grub.d; printf 'GRUB_CMDLINE_LINUX_DEFAULT="console=tty0 console=ttyS0,115200n8"\\n' > /target/etc/default/grub.d/nova-phase2-ci.cfg; in-target update-grub$GRAPHICAL_LATE; test -s /target/boot/grub/grub.cfg; echo $FILESYSTEM > /target/etc/nova-phase2-expected-fstype$LAYOUT_LATE; echo NOVA_PHASE2_INSTALL_COMPLETE >/dev/ttyS0
 d-i finish-install/reboot_in_progress note
 # Do NOT request a kernel halt: QEMU's -no-reboot exits on the real installer
 # reboot, but a halted kernel can leave QEMU running indefinitely.
 d-i cdrom-detect/eject boolean false
 PRESEED
 install -m 0755 "$ROOT/scripts/phase2-firstboot.sh" "$WORK/overlay/nova-phase2-firstboot.sh"
-cat > "$WORK/overlay/nova-phase2-firstboot.service" <<'SERVICE'
+if [[ "$BTRFS_LAYOUT" == true ]]; then
+  install -m 0755 "$ROOT/scripts/phase2-btrfs-layout-ci.sh" "$WORK/overlay/nova-phase2-btrfs-layout-ci.sh"
+fi
+cat > "$WORK/overlay/nova-phase2-firstboot.service" <<SERVICE
 [Unit]
 Description=NOVA disposable VM first-boot acceptance
-After=local-fs.target systemd-user-sessions.service
+After=$SERVICE_AFTER
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/nova-phase2-firstboot.sh
-TimeoutStartSec=180
+TimeoutStartSec=$SERVICE_TIMEOUT
 [Install]
-WantedBy=multi-user.target
+WantedBy=$SERVICE_WANTED
 SERVICE
 
 # Appending an uncompressed cpio archive to an uncompressed initrd is supported
@@ -157,6 +200,9 @@ echo "CI installer overlay file list:"
 printf '%s\n' "$overlay_entries"
 grep -Fq 'preseed.cfg' <<< "$overlay_entries" || fail "CI preseed missing from overlay"
 grep -Fq 'nova-phase2-firstboot.sh' <<< "$overlay_entries" || fail "CI guest probe missing from overlay"
+if [[ "$BTRFS_LAYOUT" == true ]]; then
+  grep -Fq 'nova-phase2-btrfs-layout-ci.sh' <<< "$overlay_entries" || fail "CI Btrfs layout script not staged"
+fi
 cat "$WORK/ci-overlay.cpio" >> "$WORK/initrd.raw"
 gzip -1 -c "$WORK/initrd.raw" > "$WORK/test-initrd.gz"
 [[ -s "$WORK/test-initrd.gz" ]] || fail "could not generate CI installer initrd"
@@ -234,6 +280,278 @@ wait_qemu_exit() {
   return 1
 }
 
+# Capture the real virtual GPU framebuffer only after the user session has
+# passed the in-guest Wayland and NOVA Desktop process checks.
+capture_guest_screen() {
+  local socket_path="$1" screenshot="$2"
+  python3 - "$socket_path" "$screenshot" <<'PY'
+import pathlib
+import socket
+import sys
+import time
+
+sock_path, screenshot = sys.argv[1:]
+def desktop_pixels(path):
+    # QEMU emits binary P6 PPM. A valid file alone is insufficient: the
+    # Plasma splash captured in run 42472222973 was 99.4% black.
+    # Require a visibly rendered frame, not a transient boot splash.
+    with open(path, "rb") as stream:
+        if stream.readline().strip() != b"P6":
+            return False
+        line = stream.readline()
+        while line.startswith(b"#"):
+            line = stream.readline()
+        width, height = map(int, line.split())
+        if stream.readline().strip() != b"255":
+            return False
+        if width < 640 or height < 480:
+            return False
+        pixels = stream.read(width * height * 3)
+        if len(pixels) != width * height * 3:
+            return False
+    sampled = range(0, len(pixels), 3 * 16)
+    visible = sum(1 for i in sampled if max(pixels[i:i+3]) > 40)
+    return visible / len(sampled) >= 0.03
+
+for attempt in range(90):
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(3)
+            sock.connect(sock_path)
+            sock.sendall(("screendump " + screenshot + "\r\n").encode())
+            time.sleep(0.8)
+        if pathlib.Path(screenshot).is_file() and pathlib.Path(screenshot).stat().st_size > 1024:
+            if desktop_pixels(screenshot):
+                sys.exit(0)
+    except (OSError, TimeoutError, ValueError):
+        pass
+    time.sleep(0.2)
+sys.exit("QEMU framebuffer never advanced beyond the dark splash/blank screen")
+PY
+}
+
+
+# Real input through QEMU's loopback-only VNC server. No DOM injection or
+# guest-side synthetic success marker. Preserve frames for human review.
+graphical_scroll_probe() {
+  local monitor="$1" prefix="$2"
+  python3 - "$monitor" "$prefix" <<'PY'
+import pathlib
+import socket
+import struct
+import sys
+import time
+
+import json
+
+monitor, prefix = sys.argv[1:]
+def read_exact(sock, n):
+    data = bytearray()
+    while len(data) < n:
+        chunk = sock.recv(n - len(data))
+        if not chunk:
+            raise RuntimeError("VNC connection closed")
+        data.extend(chunk)
+    return bytes(data)
+
+def frame(label):
+    path = pathlib.Path(prefix + "-" + label + "-graphical-session.ppm")
+    if path.exists():
+        raise RuntimeError("refusing stale framebuffer")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        sock.settimeout(3)
+        sock.connect(monitor)
+        sock.sendall(("screendump " + str(path) + "\r\n").encode())
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            if path.exists():
+                with path.open("rb") as stream:
+                    magic = stream.readline().strip()
+                    dimensions = stream.readline()
+                    while dimensions.startswith(b"#"):
+                        dimensions = stream.readline()
+                    w, h = map(int, dimensions.split())
+                    depth = stream.readline().strip()
+                    pixels = stream.read()
+                if magic == b"P6" and depth == b"255" and len(pixels) == w*h*3:
+                    return w, h, pixels
+            time.sleep(.2)
+    raise RuntimeError("missing complete framebuffer: " + label)
+
+def difference(a, b):
+    if a[:2] != b[:2]:
+        raise RuntimeError("unexpected display resize")
+    w, h = a[:2]
+    # Exclude title bar, taskbar/clock and pointer-sized changes.
+    positions = [(y*w+x)*3 for y in range(100, h-100, 8)
+                 for x in range(40, w-40, 8)]
+    return sum(max(abs(a[2][i+j]-b[2][i+j]) for j in range(3)) > 25
+               for i in positions) / len(positions)
+
+with socket.create_connection(("127.0.0.1", 5906), timeout=5) as vnc:
+    version = read_exact(vnc, 12)
+    if version != b"RFB 003.008\n":
+        raise RuntimeError("unexpected VNC protocol: " + repr(version))
+    vnc.sendall(version)
+    count = read_exact(vnc, 1)[0]
+    if not count or 1 not in read_exact(vnc, count):
+        raise RuntimeError("expected local no-auth VNC")
+    vnc.sendall(b"\x01")
+    if read_exact(vnc, 4) != b"\x00"*4:
+        raise RuntimeError("VNC security negotiation failed")
+    vnc.sendall(b"\x01")
+    header = read_exact(vnc, 24)
+    w, h = struct.unpack(">HH", header[:4])
+    read_exact(vnc, struct.unpack(">I", header[20:24])[0])
+    x, y = int(w*.46), int(h*.70)
+    def pointer(mask):
+        vnc.sendall(struct.pack(">BBHH", 5, mask, x, y))
+        time.sleep(.12)
+    pointer(0)
+    time.sleep(1)
+    before = frame("scroll-before")
+    for _ in range(10):
+        pointer(16)
+        pointer(0)
+    time.sleep(2)
+    down = frame("scroll-down")
+    for _ in range(10):
+        pointer(8)
+        pointer(0)
+    time.sleep(2)
+    restored = frame("scroll-up")
+    moved = difference(before, down)
+    returned = difference(down, restored)
+    residual = difference(before, restored)
+    print(f"VNC_SCROLL_CHANGED={moved:.4f} RETURN_CHANGED={returned:.4f} RESIDUAL={residual:.4f}", flush=True)
+    if moved < .05 or returned < .05 or residual >= moved*.5:
+        raise RuntimeError("scroll did not produce a substantial reversible content change")
+    print("NOVA_PHASE2_VNC_SCROLL_FRAME_CHANGE_OK", flush=True)
+    # Coordinates are grounded in independently reviewed #68's 1280x800
+    # scroll-down frame. Fail closed on a different geometry.
+    if (w, h) != (1280, 800):
+        raise RuntimeError("interaction coordinates require reviewed 1280x800 layout")
+    for _ in range(10):
+        pointer(16)
+        pointer(0)
+    time.sleep(1)
+    # VNC wheel works, but #69 and #70 both selected page text rather
+    # than focusing the input. Send explicit absolute QMP events instead
+    # of relying on the RFB pointer-mode negotiation.
+    def qmp(command, arguments=None):
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(5)
+            sock.connect(monitor + ".qmp")
+            stream = sock.makefile("rwb")
+            greeting = json.loads(stream.readline())
+            if "QMP" not in greeting:
+                raise RuntimeError("missing QMP greeting")
+            def execute(name, args=None):
+                request = {"execute": name}
+                if args is not None:
+                    request["arguments"] = args
+                stream.write(json.dumps(request).encode() + b"\n")
+                stream.flush()
+                while True:
+                    response = json.loads(stream.readline())
+                    if "error" in response:
+                        raise RuntimeError(str(response["error"]))
+                    if "return" in response:
+                        return response["return"]
+            execute("qmp_capabilities")
+            return execute(command, arguments)
+    print("QMP_MICE=" + json.dumps(qmp("query-mice")), flush=True)
+    def click(px, py):
+        qmp("input-send-event", {"events": [
+            {"type": "abs", "data": {"axis": "x", "value": round(px*32767/(w-1))}},
+            {"type": "abs", "data": {"axis": "y", "value": round(py*32767/(h-1))}}
+        ]})
+        time.sleep(.4)
+        for down in (True, False):
+            qmp("input-send-event", {"events": [
+                {"type": "btn", "data": {"button": "left", "down": down}}
+            ]})
+            time.sleep(.2)
+    def key(sym, down):
+        vnc.sendall(struct.pack(">BBHI", 4, int(down), 0, sym))
+        time.sleep(.04)
+    def tap(sym):
+        key(sym, True)
+        key(sym, False)
+    def replace_text(value):
+        key(0xffe3, True)
+        tap(ord("a"))
+        key(0xffe3, False)
+        for char in value:
+            tap(ord(char))
+    pretype = frame("interaction-pretype")
+    click(240, 74)
+    time.sleep(.5)
+    replace_text("nova-mouse-proof.deb")
+    time.sleep(.5)
+    typed = frame("interaction-typed")
+    # The previous false positives selected the entire page. Reject changes
+    # outside the input strip before attempting submission.
+    def region_change(a, b, x0, y0, x1, y1):
+        if a[:2] != b[:2]:
+            raise RuntimeError("unexpected display resize")
+        positions = [(y*w+x)*3 for y in range(y0, y1, 2)
+                     for x in range(x0, x1, 2)]
+        return sum(max(abs(a[2][i+j]-b[2][i+j]) for j in range(3)) > 25
+                   for i in positions) / len(positions)
+    input_change = region_change(pretype, typed, 110, 60, 760, 90)
+    outside_change = region_change(pretype, typed, 40, 130, 1230, 730)
+    print(f"INSPECTOR_INPUT_CHANGE={input_change:.4f} OUTSIDE_CHANGE={outside_change:.4f}", flush=True)
+    if input_change < .005 or outside_change > .01:
+        raise RuntimeError("typing did not stay localized to the inspector input")
+    click(830, 74)
+    time.sleep(3)
+    mouse_result = frame("interaction-mouse-result")
+    if difference(typed, mouse_result) < .015:
+        raise RuntimeError("mouse submit did not visibly change the inspector")
+    # The submit button retains focus after a click. Shift+Tab returns to
+    # the input without assuming its coordinates after the result expands.
+    key(0xffe1, True)
+    tap(0xff09)
+    key(0xffe1, False)
+    replace_text("nova-keyboard-proof.exe")
+    tap(0xff09)
+    tap(0xff0d)
+    time.sleep(3)
+    keyboard_result = frame("interaction-keyboard-result")
+    if difference(mouse_result, keyboard_result) < .005:
+        raise RuntimeError("keyboard submit did not visibly change the inspector")
+    tap(0xff1b)
+    frame("interaction-escape")
+    print("NOVA_PHASE2_VNC_INSPECTOR_FRAME_CHANGE_OK", flush=True)
+    # Exercise real window-manager close and KDE launcher input.
+    key(0xffe9, True)
+    tap(0xffc1)  # F4
+    key(0xffe9, False)
+    time.sleep(3)
+    closed = frame("window-closed")
+    if difference(keyboard_result, closed) < .08:
+        raise RuntimeError("Alt+F4 did not visibly close NOVA")
+    key(0xffe9, True)
+    tap(0xffbf)  # F2
+    key(0xffe9, False)
+    time.sleep(2)
+    for char in "nova-shell":
+        tap(ord(char))
+    time.sleep(2)
+    frame("window-launcher")
+    tap(0xff0d)
+    time.sleep(12)
+    reopened = frame("window-reopened")
+    if difference(closed, reopened) < .08:
+        raise RuntimeError("KDE launcher did not visibly reopen NOVA")
+    print("NOVA_PHASE2_WINDOW_REOPEN_FRAME_CHANGE_OK", flush=True)
+    # Independent review must confirm desktop, launcher and connected NOVA.
+    # Frame changes are only a prefilter: independent review must confirm
+    # both exact filenames and the actual distinct runtime classifications.
+PY
+}
+
 run_one() {
   local mode="$1"
   local disk="$OUTPUT/nova-$mode-ci.qcow2"
@@ -245,11 +563,23 @@ run_one() {
   [[ ! -e "$disk" ]] || fail "refusing to overwrite existing disk: $disk"
   qemu-img create -f qcow2 "$disk" "${DISK_GIB}G" >/dev/null
   [[ "$(qemu-img info --output=json "$disk" | python3 -c 'import json,sys; print(json.load(sys.stdin)["format"])')" == qcow2 ]] || fail "invalid generated disk format"
+  # The secondary disk is a fresh RAW FILE, never a host device. It is writable
+  # so an accidental installer write would be detected by its SHA-256 digest.
+  local secondary="$OUTPUT/nova-$mode-$FILESYSTEM-nontarget.raw"
+  local -a secondary_args=()
+  if [[ "$PRESERVE_SECONDARY" == true ]]; then
+    [[ ! -e "$secondary" && ! -L "$secondary" ]] || fail "refusing to overwrite existing secondary disk: $secondary"
+    # Nonzero randomized filler detects zeroing even away from the identity marker.
+    dd if=/dev/urandom of="$secondary" bs=1M count=64 status=none
+    printf 'NOVA_PHASE2_PRESERVE_THIS_NON_TARGET_DISK\n' | dd of="$secondary" bs=1 seek=4096 conv=notrunc status=none
+    sha256sum "$secondary" > "$WORK/$mode-$FILESYSTEM-nontarget.sha256"
+    secondary_args=(-drive "if=virtio,format=raw,file=$secondary")
+  fi
   boot_firmware_args "$mode"
   echo "Starting $mode Debian live-installer on a fresh disposable disk"
   "$QEMU" -machine q35 -accel "$ACCEL" -cpu max -m "$RAM_MIB" -smp "$CPUS" -vga std -display none \
     -serial "file:$install_log" -no-reboot \
-    -drive "if=virtio,format=qcow2,file=$disk" \
+    -drive "if=virtio,format=qcow2,file=$disk" "${secondary_args[@]}" \
     -cdrom "$ISO" -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
     "${FW_ARGS[@]}" -kernel "$WORK/vmlinuz" -initrd "$WORK/test-initrd.gz" \
     -append "auto=true auto-install/enable=true preseed/file=/preseed.cfg priority=critical console=ttyS0,115200n8 DEBIAN_FRONTEND=noninteractive netcfg/choose_interface=auto" \
@@ -274,24 +604,97 @@ run_one() {
   fi
   # Shutdown by d-i is necessary but not sufficient; installed disk must boot.
   echo "Installer exited, now booting $mode virtual disk with ISO REMOVED"
-  "$QEMU" -machine q35 -accel "$ACCEL" -cpu max -m "$RAM_MIB" -smp "$CPUS" -vga std -display none \
-    -serial "file:$boot_log" -no-reboot -boot order=c \
-    -drive "if=virtio,format=qcow2,file=$disk" \
+  local monitor_socket="" screenshot="$OUTPUT/$mode-graphical-session.ppm"
+  local screenshot_done=false
+  local offline_screenshot_done=false
+  local graphics_args=(-vga std -display none)
+  local serial_args=(-serial "file:$boot_log")
+  if [[ "$GRAPHICAL" == true ]]; then
+    # Keep the kernel console/getty and the CI probe on distinct UARTs.
+    # Preserve both logs, but accept markers only from the dedicated probe.
+    serial_args=(-serial "file:$OUTPUT/$mode-installed-console.log" -serial "file:$boot_log")
+    monitor_socket="$OUTPUT/$mode-graphical-monitor.sock"
+    graphics_args=(-vga virtio -device virtio-tablet-pci -display none -vnc 127.0.0.1:6
+                   -monitor "unix:$monitor_socket,server=on,wait=off"
+                   -qmp "unix:$monitor_socket.qmp,server=on,wait=off")
+  fi
+  "$QEMU" -machine q35 -accel "$ACCEL" -cpu max -m "$RAM_MIB" -smp "$CPUS" "${graphics_args[@]}" \
+    "${serial_args[@]}" -no-reboot -boot order=c \
+    -drive "if=virtio,format=qcow2,file=$disk" "${secondary_args[@]}" \
     -netdev user,id=net0 -device virtio-net-pci,netdev=net0 "${FW_ARGS[@]}" \
     > "$OUTPUT/$mode-installed-qemu.log" 2>&1 &
   QEMU_PID=$!
   local waited=0
-  while (( waited < BOOT_TIMEOUT )); do
+  # A graphical probe already has its own bounded guest service deadline.
+  # Avoid a 20-minute silent host timeout when QEMU becomes unresponsive.
+  local boot_wait_limit="$BOOT_TIMEOUT"
+  if [[ "$GRAPHICAL" == true ]] && (( boot_wait_limit > 720 )); then
+    boot_wait_limit=720
+  fi
+  echo "NOVA_PHASE2_BOOT_WAIT_LIMIT=$boot_wait_limit mode=$mode"
+  while (( waited < boot_wait_limit )); do
+    if [[ "$GRAPHICAL" == true && "$offline_screenshot_done" == false && -f "$boot_log" ]] &&
+       grep -Fxq 'NOVA_PHASE2_OFFLINE_FRAME_READY' "$boot_log"; then
+      if grep -Fq 'NOVA_PHASE2_OFFLINE_FRAME_WINDOW_END' "$boot_log" ||
+         ! timeout -k 2s 25s bash -c "$(declare -f capture_guest_screen); capture_guest_screen \"\$1\" \"\$2\"" bash "$monitor_socket" "$OUTPUT/$mode-graphical-offline.ppm" ||
+         grep -Fq 'NOVA_PHASE2_OFFLINE_FRAME_WINDOW_END' "$boot_log"; then
+        printf 'mode=%s\nresult=FAIL\nstage=offline_framebuffer\n' "$mode" > "$result"
+        return 1
+      fi
+      offline_screenshot_done=true
+    fi
+    if [[ "$GRAPHICAL" == true && "$screenshot_done" == false &&
+          -f "$boot_log" ]] &&
+       grep -Fq 'NOVA_PHASE2_GRAPHICAL_SESSION_OK' "$boot_log"; then
+      # Let Plasma finish launching its startup applications before taking
+      # acceptance evidence. Do not dismiss popups: they must remain visible
+      # if the shipping image still launches them.
+      echo "NOVA_PHASE2_GUI_SETTLE_WAIT=15s"
+      sleep 15
+      if ! capture_guest_screen "$monitor_socket" "$screenshot"; then
+        echo "FAIL: real graphical session screenshot not captured" >&2
+        printf 'mode=%s\nresult=FAIL\nstage=graphical_screenshot\n' "$mode" > "$result"
+        return 1
+      fi
+      if ! timeout -k 2s 85s bash -c "$(declare -f graphical_scroll_probe); graphical_scroll_probe \"\$1\" \"\$2\"" bash "$monitor_socket" "$OUTPUT/$mode" > "$OUTPUT/$mode-graphical-scroll.log" 2>&1; then
+        cat "$OUTPUT/$mode-graphical-scroll.log"
+        printf 'mode=%s\nresult=FAIL\nstage=graphical_scroll\n' "$mode" > "$result"
+        return 1
+      fi
+      cat "$OUTPUT/$mode-graphical-scroll.log"
+      screenshot_done=true
+    fi
     if [[ -f "$boot_log" ]] && grep -Fq 'NOVA_PHASE2_GUEST_PASS' "$boot_log"; then
-      # A guest pass alone can come from an older ISO without production firstboot.
-      # Require the marker from the installed system before accepting this release gate.
-      # QEMU serial output uses CRLF, unlike the default LF-only grep check.
-      # Match the complete marker with either terminator; reject extra text.
+      # A pass marker without the installed production initializer is insufficient.
+      # QEMU serial output has CRLF; allow only exact LF/CRLF marker lines.
       if ! grep -Fxq 'NOVA_PHASE2_PRODUCTION_FIRSTBOOT_OK' "$boot_log" &&
          ! grep -Fxq "NOVA_PHASE2_PRODUCTION_FIRSTBOOT_OK$(printf '\015')" "$boot_log"; then
         echo "FAIL: installed production firstboot marker missing" >&2
         printf 'mode=%s\nresult=FAIL\nstage=production_firstboot_unverified\n' "$mode" > "$result"
         return 1
+      fi
+      if [[ "$BTRFS_LAYOUT" == true ]]; then
+        for evidence in NOVA_PHASE2_BTRFS_LAYOUT_OK NOVA_PHASE2_SNAPSHOT_RESTORE_DATA_OK; do
+          if ! grep -Fq "$evidence" "$boot_log"; then
+            echo "FAIL: installed Btrfs layout/data restore evidence missing: $evidence" >&2
+            printf 'mode=%s\nresult=FAIL\nstage=btrfs_layout_unverified\n' "$mode" > "$result"
+            return 1
+          fi
+        done
+      fi
+      if [[ "$GRAPHICAL" == true ]]; then
+        for evidence in NOVA_PHASE2_DEDICATED_PROBE_UART=ttyS1 NOVA_PHASE2_GUI_SESSION_TYPE=wayland NOVA_PHASE2_USER_DAEMON_HEALTH_OK NOVA_PHASE2_USER_DAEMON_CRASH_RECOVERY_OK NOVA_PHASE2_USER_DAEMON_OUTAGE_OK NOVA_PHASE2_OFFLINE_FRAME_READY NOVA_PHASE2_USER_DAEMON_OUTAGE_RECOVERY_OK NOVA_PHASE2_WELCOME_SUPPRESSED_OK NOVA_PHASE2_GRAPHICAL_SESSION_OK NOVA_PHASE2_GUEST_PASS; do
+          if ! grep -Fxq "$evidence" "$boot_log" && ! grep -Fxq "$evidence$(printf '\015')" "$boot_log"; then
+            echo "FAIL: missing exact graphical acceptance marker: $evidence" >&2
+            printf 'mode=%s\nresult=FAIL\nstage=graphical_marker_missing\n' "$mode" > "$result"
+            return 1
+          fi
+        done
+        if [[ "$screenshot_done" != true || "$offline_screenshot_done" != true ]]; then
+          echo "FAIL: no verified graphical session screenshot" >&2
+          printf 'mode=%s\nresult=FAIL\nstage=graphical_evidence\n' "$mode" > "$result"
+          return 1
+        fi
       fi
       if ! grep -Fq "NOVA_PHASE2_FIRMWARE=$mode" "$boot_log" ||
          ! grep -Fq 'NOVA_PHASE2_ROOT_SOURCE=' "$boot_log" ||
@@ -300,12 +703,24 @@ run_one() {
         printf 'mode=%s\nresult=FAIL\nstage=installed_boot_evidence\n' "$mode" > "$result"
         return 1
       fi
-      if ! wait_qemu_exit 90 "$mode guest shutdown"; then
+      # The graphical guest deliberately remains up to 110s for settled desktop
+       # evidence. A 90s shutdown wait would falsely fail an early screenshot.
+       shutdown_budget=90
+       if [[ "$GRAPHICAL" == true ]]; then shutdown_budget=180; fi
+       if ! wait_qemu_exit "$shutdown_budget" "$mode guest shutdown"; then
         printf 'mode=%s\nresult=FAIL\nstage=guest_shutdown_%s\n' "$mode" "$WAIT_REASON" > "$result"
         return 1
       fi
+      if [[ "$PRESERVE_SECONDARY" == true ]]; then
+        if ! sha256sum -c "$WORK/$mode-$FILESYSTEM-nontarget.sha256"; then
+          echo "FAIL: non-target disk contents changed" >&2
+          printf 'mode=%s\nresult=FAIL\nstage=non_target_disk_changed\n' "$mode" > "$result"
+          return 1
+        fi
+        echo "NOVA_PHASE2_NON_TARGET_DISK_PRESERVED"
+      fi
       echo "PASS: $mode installed NOVA booted without ISO, passed guest checks and shut down cleanly"
-      printf 'mode=%s\nresult=PASS\npostinstall=verified\nshutdown=verified\n' "$mode" > "$result"
+      printf 'mode=%s\nfilesystem=%s\nresult=PASS\npostinstall=verified\nshutdown=verified\ngraphical=%s\npreserved_secondary=%s\n' "$mode" "$FILESYSTEM" "$GRAPHICAL" "$PRESERVE_SECONDARY" > "$result"
       return 0
     fi
     if [[ -f "$boot_log" ]] && grep -Fq 'NOVA_PHASE2_GUEST_FAIL' "$boot_log"; then
@@ -322,9 +737,44 @@ run_one() {
       printf 'mode=%s\nresult=FAIL\nstage=early_shutdown\n' "$mode" > "$result"
       return 1
     fi
+    # Host-side liveness evidence: run #52 stopped producing guest serial after
+    # the first GUI poll. This does not alter the shipping ISO or guest timing.
+    if [[ "$GRAPHICAL" == true ]] && (( waited > 0 && waited % 60 == 0 )); then
+      echo "NOVA_PHASE2_HOST_GUI_HEARTBEAT elapsed=${waited}s qemu_pid=${QEMU_PID}"
+      ps -o pid,ppid,stat,etime,%cpu,%mem,rss,comm -p "$QEMU_PID" || true
+      if [[ -f "$boot_log" ]]; then
+        echo "NOVA_PHASE2_HOST_GUI_SERIAL_TAIL_BEGIN"
+        tail -n 12 "$boot_log" || true
+        echo "NOVA_PHASE2_HOST_GUI_SERIAL_TAIL_END"
+      fi
+    fi
     sleep 5
     waited=$((waited+5))
   done
+  # A failed graphical boot still needs visual evidence. Capture the raw
+  # framebuffer before cleanup, even if it is black or a login screen.
+  # This diagnostic never sets screenshot_done or changes the FAIL result.
+  if [[ "$GRAPHICAL" == true && "$screenshot_done" == false ]]; then
+    echo "NOVA_PHASE2_FAILED_GUI_FRAMEBUFFER_BEGIN"
+    timeout -k 2s 12s python3 - "$monitor_socket" "$screenshot" <<'PY' || true
+import pathlib
+import socket
+import sys
+import time
+
+sock_path, screenshot = sys.argv[1:]
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+    sock.settimeout(3)
+    sock.connect(sock_path)
+    sock.sendall(("screendump " + screenshot + "\r\n").encode())
+    for _ in range(30):
+        time.sleep(0.2)
+        if pathlib.Path(screenshot).is_file():
+            print("Failed-boot framebuffer bytes:", pathlib.Path(screenshot).stat().st_size)
+            break
+PY
+    echo "NOVA_PHASE2_FAILED_GUI_FRAMEBUFFER_END"
+  fi
   echo "Installed $mode boot timed out" >&2
   [[ ! -f "$boot_log" ]] || tail -n 80 "$boot_log" >&2
   printf 'mode=%s\nresult=FAIL\nstage=boot_timeout\n' "$mode" > "$result"

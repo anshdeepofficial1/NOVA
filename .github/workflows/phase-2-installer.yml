@@ -21,13 +21,14 @@ on:
     paths:
       - "scripts/smoke-installed-iso-qemu.sh"
       - "scripts/phase2-firstboot.sh"
+      - "scripts/phase2-btrfs-layout-ci.sh"
       - ".github/workflows/phase-2-installer.yml"
   # Re-run the installed-system acceptance against every successfully rebuilt ISO,
   # not only when its VM harness changes.
   workflow_run:
     workflows: ["Build NOVA ISO"]
     types: [completed]
-    branches: [main]
+    branches: [main, "work/phase2-integrated-vm-acceptance"]
 
 permissions:
   contents: read
@@ -45,6 +46,8 @@ jobs:
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       - name: Install virtual machine and ISO tools
         run: |
           sudo apt-get update
@@ -54,6 +57,7 @@ jobs:
         run: |
           bash -n scripts/smoke-installed-iso-qemu.sh
           bash -n scripts/phase2-firstboot.sh
+          bash -n scripts/phase2-btrfs-layout-ci.sh
           grep -Fq 'partman-auto/disk string /dev/vda' scripts/smoke-installed-iso-qemu.sh
           grep -Fq 'if=virtio,format=qcow2,file=$disk' scripts/smoke-installed-iso-qemu.sh
           grep -Fq 'refusing to overwrite existing disk' scripts/smoke-installed-iso-qemu.sh
@@ -67,12 +71,55 @@ jobs:
           if [[ -n "$REQUESTED_RUN" ]]; then
             run="$REQUESTED_RUN"
           else
-            run="$(gh run list --workflow build-iso.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
+            source_branch="main"
+            if [[ "${{ github.ref_name }}" == "work/phase2-integrated-vm-acceptance" ]]; then
+              source_branch="work/phase2-integrated-vm-acceptance"
+            fi
+            run="$(gh run list --workflow build-iso.yml --branch "$source_branch" --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
           fi
           [[ "$run" =~ ^[0-9]+$ ]] || { echo "No successful ISO workflow run found"; exit 1; }
           echo "run_id=$run" >> "$GITHUB_OUTPUT"
           gh run view "$run" --json conclusion,headSha --jq '{conclusion,headSha}'
           [[ "$(gh run view "$run" --json conclusion --jq .conclusion)" == success ]]
+          # Bind evidence to the exact successful ISO run. A workflow_run event
+          # must use its triggering build, even if main advances meanwhile.
+          # For manual/push runs, reject stale implicit latest-build selection;
+          # an explicitly requested historical build remains traceable.
+          run_json="$(gh run view "$run" --json headSha,headBranch,workflowName,event)"
+          iso_sha="$(jq -r .headSha <<< "$run_json")"
+          iso_branch="$(jq -r .headBranch <<< "$run_json")"
+          iso_workflow="$(jq -r .workflowName <<< "$run_json")"
+          [[ "$iso_workflow" == "Build NOVA ISO" && ( "$iso_branch" == main || "$iso_branch" == "work/phase2-integrated-vm-acceptance" ) ]] || {
+            echo "::error::Run $run is not an approved Build NOVA ISO run."
+            exit 1
+          }
+          if [[ "${{ github.event_name }}" == workflow_run ]]; then
+            [[ "$run" == "${{ github.event.workflow_run.id }}" && "$iso_sha" == "${{ github.event.workflow_run.head_sha }}" && "$iso_branch" == "${{ github.event.workflow_run.head_branch }}" ]] || {
+              echo "::error::Triggered ISO run ID/SHA mismatch."
+              exit 1
+            }
+          elif [[ -z "${{ inputs.iso_run_id || '' }}" ]]; then
+            target_sha="$(git rev-parse HEAD)"
+            if [[ "$iso_sha" != "$target_sha" ]]; then
+              compare="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${iso_sha}...${target_sha}")"
+              # Allow a bounded series of harness-only revisions; the full changed-file allowlist still applies.
+              if ! jq -e '(.status == "ahead") and (.total_commits <= 20) and (.files | length > 0 and length <= 20) and all(.files[]; (.filename | startswith("docs/")) or (.filename == "scripts/smoke-installed-iso-qemu.sh") or (.filename == "scripts/phase2-firstboot.sh") or (.filename == "scripts/phase2-btrfs-layout-ci.sh") or (.filename == ".github/workflows/phase-2-installer.yml"))' <<< "$compare" >/dev/null; then
+                echo "::error::ISO $run at $iso_sha is not image-equivalent to harness $target_sha."
+                exit 1
+              fi
+              echo "::notice::Image-equivalent ISO $run ($iso_sha) with harness-only changes through $target_sha."
+            fi
+          fi
+          # For branch image testing, the installed-VM harness must be from
+          # the same immutable source revision as the ISO, not main or an
+          # unrelated PR revision. This is separate from main release evidence.
+          if [[ "$iso_branch" == "work/phase2-integrated-vm-acceptance" && "${{ github.event_name }}" == workflow_run ]]; then
+            [[ "$iso_sha" == "$(git rev-parse HEAD)" ]] || {
+              echo "::error::Triggered branch ISO SHA differs from checked-out VM harness."
+              exit 1
+            }
+          fi
+          echo "Selected immutable ISO run $run at commit $iso_sha"
       - name: Download exact tested NOVA ISO artifact
         env:
           GH_TOKEN: ${{ github.token }}
@@ -84,6 +131,15 @@ jobs:
           find "$RUNNER_TEMP/nova-iso" -name '*.sha256' -size +0c -print
           iso="$(find "$RUNNER_TEMP/nova-iso" -name 'live-image-amd64.hybrid.iso' -print -quit)"
           [[ -s "$iso" && -s "$iso.sha256" ]]
+          # Reject corrupt or mismatched downloaded ISO bytes before any VM install.
+          # The build writes a basename-relative sha256sum manifest.
+          (cd "$(dirname "$iso")" && sha256sum --check --status "$(basename "$iso").sha256") || {
+            echo "::error::Downloaded ISO does not match its build SHA-256 manifest."
+            exit 1
+          }
+          # Preserve the verified ISO digest in the job log and diagnostic archive.
+          iso_digest="$(sha256sum "$iso" | cut -d ' ' -f 1)"
+          printf 'ISO run=%s sha256=%s\n' "$RUN_ID" "$iso_digest" | tee "$RUNNER_TEMP/nova-iso-provenance.txt"
           echo "NOVA_ISO=$iso" >> "$GITHUB_ENV"
       - name: Install to disposable qcow2 and verify disk-only boot
         env:
@@ -95,13 +151,40 @@ jobs:
             --output-dir "$RUNNER_TEMP/nova-installed" \
             --install-timeout 5400 \
             --boot-timeout 1200
+      - name: Validate persistent Btrfs layout, snapshot restoration and disk preservation
+        run: |
+          sudo bash scripts/smoke-installed-iso-qemu.sh \
+            --iso "$NOVA_ISO" \
+            --firmware uefi \
+            --filesystem btrfs \
+            --btrfs-layout \
+            --preserve-secondary \
+            --output-dir "$RUNNER_TEMP/nova-installed-btrfs-layout" \
+            --install-timeout 5400 \
+            --boot-timeout 1200
+      - name: Validate real SDDM Wayland and NOVA Desktop user session
+        run: |
+          sudo bash scripts/smoke-installed-iso-qemu.sh \
+            --iso "$NOVA_ISO" \
+            --firmware uefi \
+            --graphical \
+            --output-dir "$RUNNER_TEMP/nova-installed-graphical" \
+            --install-timeout 5400 \
+            --boot-timeout 1200
       - name: Upload installation and first-boot diagnostics
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: NOVA-Phase2-installation-diagnostics
           path: |
+            ${{ runner.temp }}/nova-iso-provenance.txt
             ${{ runner.temp }}/nova-installed/*.log
             ${{ runner.temp }}/nova-installed/*-result.txt
+            ${{ runner.temp }}/nova-installed-btrfs-layout/*.log
+            ${{ runner.temp }}/nova-installed-btrfs-layout/*-result.txt
+            ${{ runner.temp }}/nova-installed-graphical/*.log
+            ${{ runner.temp }}/nova-installed-graphical/*-result.txt
+            ${{ runner.temp }}/nova-installed-graphical/*-graphical-session.ppm
+            ${{ runner.temp }}/nova-installed-graphical/*-graphical-offline.ppm
           if-no-files-found: warn
           retention-days: 14

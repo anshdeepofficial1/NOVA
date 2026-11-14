@@ -1,8 +1,11 @@
 name: Build NOVA ISO
 
+# Refresh immutable image provenance after G2 harness exceeds the 20-commit
+# image-equivalence bound (installed VM #73); do not relax that safety gate.
+
 on:
   push:
-    branches: [main]
+    branches: [main, "work/phase2-integrated-vm-acceptance"]
     paths:
       - "os/debian-live/**"
       - "apps/shell/**"

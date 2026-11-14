@@ -279,6 +279,36 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
     ps -eo pid,ppid,uid,stat,args | grep -Ei 'plasmashell|drkonqi|kwin_wayland' || true
     echo "NOVA_PHASE2_PLASMA_RESTART_DIAGNOSTICS_END"
   }
+  # Run #77 stopped Plasma only seconds after startup, while the Vault
+  # applet was still initializing QML/QtDBus (core dump PID 1220).
+  # Require a stable workspace before exercising normal session teardown.
+  # Do not disable the applet or crash reporting.
+  plasma_stable=0
+  plasma_previous_pid=""
+  plasma_settle_deadline=$((SECONDS + 120))
+  while (( SECONDS < plasma_settle_deadline )); do
+    plasma_pid="$(pgrep -u "$uid" -x plasmashell | head -n 1 || true)"
+    if [[ -n "$plasma_pid" ]] &&
+       plasma_user_ctl is-active --quiet plasma-plasmashell.service &&
+       plasma_user_ctl is-active --quiet plasma-workspace.target; then
+      if [[ "$plasma_pid" == "$plasma_previous_pid" ]]; then
+        plasma_stable=$((plasma_stable + 1))
+      else
+        plasma_stable=0
+      fi
+      plasma_previous_pid="$plasma_pid"
+      (( plasma_stable >= 30 )) && break
+    else
+      plasma_stable=0
+      plasma_previous_pid=""
+    fi
+    sleep 1
+  done
+  if (( plasma_stable < 30 )); then
+    plasma_restart_diagnostics
+    exit 1
+  fi
+  echo "NOVA_PHASE2_PLASMA_INITIAL_SETTLED pid=$plasma_previous_pid"
   if ! plasma_user_ctl stop plasma-workspace.target; then
     plasma_restart_diagnostics
     exit 1
@@ -340,6 +370,17 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
   # A new compositor and NOVA process are not sufficient: #76 had both
   # while a Plasma crash dialog intercepted real mouse input.
   plasma_restart_diagnostics
+  # Reject a real Plasma core dump even if the crash handler has exited.
+  if ! plasma_cores="$(timeout -k 2s 8s coredumpctl --no-pager --since "$plasma_restart_since" list /usr/bin/plasmashell 2>&1)"; then
+    if ! grep -Fxq 'No coredumps found.' <<< "$plasma_cores"; then
+      printf '%s\n' "$plasma_cores"
+      exit 1
+    fi
+  elif grep -Fq '/usr/bin/plasmashell' <<< "$plasma_cores"; then
+    printf '%s\n' "$plasma_cores"
+    echo "NOVA_PHASE2_PLASMA_COREDUMP_FOUND"
+    exit 1
+  fi
   if ! plasma_user_ctl is-active --quiet plasma-plasmashell.service ||
      ! pgrep -u "$uid" -x plasmashell >/dev/null ||
      pgrep -u "$uid" -f '[d]rkonqi' >/dev/null; then

@@ -524,6 +524,29 @@ with socket.create_connection(("127.0.0.1", 5906), timeout=5) as vnc:
     tap(0xff1b)
     frame("interaction-escape")
     print("NOVA_PHASE2_VNC_INSPECTOR_FRAME_CHANGE_OK", flush=True)
+    # Exercise real window-manager close and KDE launcher input.
+    key(0xffe9, True)
+    tap(0xffc1)  # F4
+    key(0xffe9, False)
+    time.sleep(3)
+    closed = frame("window-closed")
+    if difference(keyboard_result, closed) < .08:
+        raise RuntimeError("Alt+F4 did not visibly close NOVA")
+    key(0xffe9, True)
+    tap(0xffbf)  # F2
+    key(0xffe9, False)
+    time.sleep(2)
+    for char in "nova-shell":
+        tap(ord(char))
+    time.sleep(2)
+    frame("window-launcher")
+    tap(0xff0d)
+    time.sleep(12)
+    reopened = frame("window-reopened")
+    if difference(closed, reopened) < .08:
+        raise RuntimeError("KDE launcher did not visibly reopen NOVA")
+    print("NOVA_PHASE2_WINDOW_REOPEN_FRAME_CHANGE_OK", flush=True)
+    # Independent review must confirm desktop, launcher and connected NOVA.
     # Frame changes are only a prefilter: independent review must confirm
     # both exact filenames and the actual distinct runtime classifications.
 PY

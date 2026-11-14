@@ -330,6 +330,104 @@ sys.exit("QEMU framebuffer never advanced beyond the dark splash/blank screen")
 PY
 }
 
+
+# Real input through QEMU's loopback-only VNC server. No DOM injection or
+# guest-side synthetic success marker. Preserve frames for human review.
+graphical_scroll_probe() {
+  local monitor="$1" prefix="$2"
+  python3 - "$monitor" "$prefix" <<'PY'
+import pathlib
+import socket
+import struct
+import sys
+import time
+
+monitor, prefix = sys.argv[1:]
+def read_exact(sock, n):
+    data = bytearray()
+    while len(data) < n:
+        chunk = sock.recv(n - len(data))
+        if not chunk:
+            raise RuntimeError("VNC connection closed")
+        data.extend(chunk)
+    return bytes(data)
+
+def frame(label):
+    path = pathlib.Path(prefix + "-" + label + "-graphical-session.ppm")
+    if path.exists():
+        raise RuntimeError("refusing stale framebuffer")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        sock.settimeout(3)
+        sock.connect(monitor)
+        sock.sendall(("screendump " + str(path) + "\r\n").encode())
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            if path.exists():
+                with path.open("rb") as stream:
+                    magic = stream.readline().strip()
+                    dimensions = stream.readline()
+                    while dimensions.startswith(b"#"):
+                        dimensions = stream.readline()
+                    w, h = map(int, dimensions.split())
+                    depth = stream.readline().strip()
+                    pixels = stream.read()
+                if magic == b"P6" and depth == b"255" and len(pixels) == w*h*3:
+                    return w, h, pixels
+            time.sleep(.2)
+    raise RuntimeError("missing complete framebuffer: " + label)
+
+def difference(a, b):
+    if a[:2] != b[:2]:
+        raise RuntimeError("unexpected display resize")
+    w, h = a[:2]
+    # Exclude title bar, taskbar/clock and pointer-sized changes.
+    positions = [(y*w+x)*3 for y in range(100, h-100, 8)
+                 for x in range(40, w-40, 8)]
+    return sum(max(abs(a[2][i+j]-b[2][i+j]) for j in range(3)) > 25
+               for i in positions) / len(positions)
+
+with socket.create_connection(("127.0.0.1", 5906), timeout=5) as vnc:
+    version = read_exact(vnc, 12)
+    if version != b"RFB 003.008\n":
+        raise RuntimeError("unexpected VNC protocol: " + repr(version))
+    vnc.sendall(version)
+    count = read_exact(vnc, 1)[0]
+    if not count or 1 not in read_exact(vnc, count):
+        raise RuntimeError("expected local no-auth VNC")
+    vnc.sendall(b"\x01")
+    if read_exact(vnc, 4) != b"\x00"*4:
+        raise RuntimeError("VNC security negotiation failed")
+    vnc.sendall(b"\x01")
+    header = read_exact(vnc, 24)
+    w, h = struct.unpack(">HH", header[:4])
+    read_exact(vnc, struct.unpack(">I", header[20:24])[0])
+    x, y = int(w*.46), int(h*.70)
+    def pointer(mask):
+        vnc.sendall(struct.pack(">BBHH", 5, mask, x, y))
+        time.sleep(.12)
+    pointer(0)
+    time.sleep(1)
+    before = frame("scroll-before")
+    for _ in range(10):
+        pointer(16)
+        pointer(0)
+    time.sleep(2)
+    down = frame("scroll-down")
+    for _ in range(10):
+        pointer(8)
+        pointer(0)
+    time.sleep(2)
+    restored = frame("scroll-up")
+    moved = difference(before, down)
+    returned = difference(down, restored)
+    residual = difference(before, restored)
+    print(f"VNC_SCROLL_CHANGED={moved:.4f} RETURN_CHANGED={returned:.4f} RESIDUAL={residual:.4f}", flush=True)
+    if moved < .05 or returned < .05 or residual >= moved*.5:
+        raise RuntimeError("scroll did not produce a substantial reversible content change")
+    print("NOVA_PHASE2_VNC_SCROLL_FRAME_CHANGE_OK", flush=True)
+PY
+}
+
 run_one() {
   local mode="$1"
   local disk="$OUTPUT/nova-$mode-ci.qcow2"
@@ -433,6 +531,12 @@ run_one() {
         printf 'mode=%s\nresult=FAIL\nstage=graphical_screenshot\n' "$mode" > "$result"
         return 1
       fi
+      if ! timeout -k 2s 45s bash -c "$(declare -f graphical_scroll_probe); graphical_scroll_probe \"\$1\" \"\$2\"" bash "$monitor_socket" "$OUTPUT/$mode" > "$OUTPUT/$mode-graphical-scroll.log" 2>&1; then
+        cat "$OUTPUT/$mode-graphical-scroll.log"
+        printf 'mode=%s\nresult=FAIL\nstage=graphical_scroll\n' "$mode" > "$result"
+        return 1
+      fi
+      cat "$OUTPUT/$mode-graphical-scroll.log"
       screenshot_done=true
     fi
     if [[ -f "$boot_log" ]] && grep -Fq 'NOVA_PHASE2_GUEST_PASS' "$boot_log"; then

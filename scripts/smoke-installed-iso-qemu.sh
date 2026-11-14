@@ -342,6 +342,8 @@ import struct
 import sys
 import time
 
+import json
+
 monitor, prefix = sys.argv[1:]
 def read_exact(sock, n):
     data = bytearray()
@@ -433,10 +435,43 @@ with socket.create_connection(("127.0.0.1", 5906), timeout=5) as vnc:
         pointer(16)
         pointer(0)
     time.sleep(1)
+    # VNC wheel works, but #69 and #70 both selected page text rather
+    # than focusing the input. Send explicit absolute QMP events instead
+    # of relying on the RFB pointer-mode negotiation.
+    def qmp(command, arguments=None):
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(5)
+            sock.connect(monitor + ".qmp")
+            stream = sock.makefile("rwb")
+            greeting = json.loads(stream.readline())
+            if "QMP" not in greeting:
+                raise RuntimeError("missing QMP greeting")
+            def execute(name, args=None):
+                request = {"execute": name}
+                if args is not None:
+                    request["arguments"] = args
+                stream.write(json.dumps(request).encode() + b"\n")
+                stream.flush()
+                while True:
+                    response = json.loads(stream.readline())
+                    if "error" in response:
+                        raise RuntimeError(str(response["error"]))
+                    if "return" in response:
+                        return response["return"]
+            execute("qmp_capabilities")
+            return execute(command, arguments)
+    print("QMP_MICE=" + json.dumps(qmp("query-mice")), flush=True)
     def click(px, py):
-        for mask in (0, 1, 0):
-            vnc.sendall(struct.pack(">BBHH", 5, mask, px, py))
-            time.sleep(.12)
+        qmp("input-send-event", {"events": [
+            {"type": "abs", "data": {"axis": "x", "value": round(px*32767/(w-1))}},
+            {"type": "abs", "data": {"axis": "y", "value": round(py*32767/(h-1))}}
+        ]})
+        time.sleep(.4)
+        for down in (True, False):
+            qmp("input-send-event", {"events": [
+                {"type": "btn", "data": {"button": "left", "down": down}}
+            ]})
+            time.sleep(.2)
     def key(sym, down):
         vnc.sendall(struct.pack(">BBHI", 4, int(down), 0, sym))
         time.sleep(.04)
@@ -449,12 +484,26 @@ with socket.create_connection(("127.0.0.1", 5906), timeout=5) as vnc:
         key(0xffe3, False)
         for char in value:
             tap(ord(char))
-    # #69 selected page text instead of the input: use an absolute tablet.
+    pretype = frame("interaction-pretype")
     click(240, 74)
     time.sleep(.5)
     replace_text("nova-mouse-proof.deb")
     time.sleep(.5)
     typed = frame("interaction-typed")
+    # The previous false positives selected the entire page. Reject changes
+    # outside the input strip before attempting submission.
+    def region_change(a, b, x0, y0, x1, y1):
+        if a[:2] != b[:2]:
+            raise RuntimeError("unexpected display resize")
+        positions = [(y*w+x)*3 for y in range(y0, y1, 2)
+                     for x in range(x0, x1, 2)]
+        return sum(max(abs(a[2][i+j]-b[2][i+j]) for j in range(3)) > 25
+                   for i in positions) / len(positions)
+    input_change = region_change(pretype, typed, 110, 60, 760, 90)
+    outside_change = region_change(pretype, typed, 40, 130, 1230, 730)
+    print(f"INSPECTOR_INPUT_CHANGE={input_change:.4f} OUTSIDE_CHANGE={outside_change:.4f}", flush=True)
+    if input_change < .005 or outside_change > .01:
+        raise RuntimeError("typing did not stay localized to the inspector input")
     click(830, 74)
     time.sleep(3)
     mouse_result = frame("interaction-mouse-result")
@@ -543,7 +592,8 @@ run_one() {
     serial_args=(-serial "file:$OUTPUT/$mode-installed-console.log" -serial "file:$boot_log")
     monitor_socket="$OUTPUT/$mode-graphical-monitor.sock"
     graphics_args=(-vga virtio -device virtio-tablet-pci -display none -vnc 127.0.0.1:6
-                   -monitor "unix:$monitor_socket,server=on,wait=off")
+                   -monitor "unix:$monitor_socket,server=on,wait=off"
+                   -qmp "unix:$monitor_socket.qmp,server=on,wait=off")
   fi
   "$QEMU" -machine q35 -accel "$ACCEL" -cpu max -m "$RAM_MIB" -smp "$CPUS" "${graphics_args[@]}" \
     "${serial_args[@]}" -no-reboot -boot order=c \

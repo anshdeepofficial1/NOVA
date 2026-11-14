@@ -137,6 +137,9 @@ jobs:
             echo "::error::Downloaded ISO does not match its build SHA-256 manifest."
             exit 1
           }
+          # Preserve the verified ISO digest in the job log and diagnostic archive.
+          iso_digest="$(sha256sum "$iso" | cut -d ' ' -f 1)"
+          printf 'ISO run=%s sha256=%s\n' "$RUN_ID" "$iso_digest" | tee "$RUNNER_TEMP/nova-iso-provenance.txt"
           echo "NOVA_ISO=$iso" >> "$GITHUB_ENV"
       - name: Install to disposable qcow2 and verify disk-only boot
         env:
@@ -174,6 +177,7 @@ jobs:
         with:
           name: NOVA-Phase2-installation-diagnostics
           path: |
+            ${{ runner.temp }}/nova-iso-provenance.txt
             ${{ runner.temp }}/nova-installed/*.log
             ${{ runner.temp }}/nova-installed/*-result.txt
             ${{ runner.temp }}/nova-installed-btrfs-layout/*.log

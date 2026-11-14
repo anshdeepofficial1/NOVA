@@ -256,7 +256,23 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
   old_kwin="$(pgrep -u "$uid" -x kwin_wayland | head -n 1)"
   old_shell="$(pgrep -u "$uid" -x nova-shell | head -n 1)"
   echo "NOVA_PHASE2_SESSION_RESTART_BEGIN session=$old_session kwin=$old_kwin shell=$old_shell"
-  timeout -k 5s 45s systemctl restart display-manager.service
+  # SDDM restart alone left the old user manager alive and the new seat
+  # session inactive in run 43594865594. Drain the disposable test login
+  # before starting SDDM again, as a full logout/login would do.
+  timeout -k 5s 45s systemctl stop display-manager.service
+  timeout -k 2s 15s loginctl terminate-user novatest
+  logout_deadline=$((SECONDS + 45))
+  while [[ -d "/proc/$old_kwin" || -d "/proc/$old_shell" ]] ||
+        systemctl is-active --quiet "user@$uid.service"; do
+    if (( SECONDS >= logout_deadline )); then
+      echo "NOVA_PHASE2_SESSION_LOGOUT_FAILED"
+      loginctl list-sessions --no-legend || true
+      exit 1
+    fi
+    sleep 1
+  done
+  echo "NOVA_PHASE2_SESSION_LOGOUT_OK"
+  timeout -k 5s 45s systemctl start display-manager.service
   restart_deadline=$((SECONDS + 180))
   restarted=0
   while (( SECONDS < restart_deadline )); do
@@ -269,8 +285,16 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
         [[ -n "$new_session" && "$new_session" != "$old_session" ]] || continue
         new_info="$(timeout -k 2s 6s loginctl show-session "$new_session" -p Name -p Type -p Active 2>/dev/null || true)"
         if grep -Fxq 'Name=novatest' <<< "$new_info" &&
-           grep -Fxq 'Type=wayland' <<< "$new_info" &&
-           grep -Fxq 'Active=yes' <<< "$new_info"; then
+           grep -Fxq 'Type=wayland' <<< "$new_info"; then
+          # A restarted SDDM can allocate a different VT. Select the real
+          # new session, then independently require logind to report active.
+          if ! grep -Fxq 'Active=yes' <<< "$new_info"; then
+            timeout -k 2s 6s loginctl activate "$new_session" || true
+            new_info="$(timeout -k 2s 6s loginctl show-session "$new_session" -p Name -p Type -p Active 2>/dev/null || true)"
+          fi
+          grep -Fxq 'Name=novatest' <<< "$new_info" &&
+            grep -Fxq 'Type=wayland' <<< "$new_info" &&
+            grep -Fxq 'Active=yes' <<< "$new_info" || continue
           restarted=1
           break
         fi
@@ -281,6 +305,8 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
   done
   if (( restarted != 1 )); then
     echo "NOVA_PHASE2_SESSION_RESTART_FAILED"
+    timeout -k 2s 8s ps -eo pid,ppid,stat,user,comm --sort=pid | tail -n 80 || true
+    timeout -k 2s 8s journalctl --no-pager "_UID=$uid" -n 100 || true
     timeout -k 2s 8s loginctl list-sessions --no-legend || true
     timeout -k 2s 8s journalctl --no-pager -u sddm.service -n 80 || true
     exit 1

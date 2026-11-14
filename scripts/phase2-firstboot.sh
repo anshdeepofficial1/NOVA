@@ -344,8 +344,24 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
       systemctl --user "$@" nova-daemon.service
   }
   user_daemon_ctl stop
-  if curl --fail --silent --max-time 2 http://127.0.0.1:47820/health >/dev/null; then
+  # A successful stop job is not proof that the listening socket is gone.
+  # Capture ownership and unit state on failure, including a competing
+  # listener or a session-triggered start. Never kill an unknown process.
+  outage_stopped=0
+  for attempt in $(seq 1 15); do
+    if ! user_daemon_ctl is-active --quiet &&
+       ! curl --fail --silent --max-time 2 http://127.0.0.1:47820/health >/dev/null; then
+      outage_stopped=1
+      break
+    fi
+    sleep 1
+  done
+  if (( outage_stopped != 1 )); then
     echo "NOVA_PHASE2_USER_DAEMON_OUTAGE_FAILED"
+    user_daemon_ctl show -p MainPID -p ActiveState -p SubState -p NRestarts -p Result || true
+    timeout -k 2s 8s ss -ltnp 'sport = :47820' || true
+    timeout -k 2s 8s ps -eo pid,ppid,uid,stat,args | grep -E 'nova-daemon|nova-shell' || true
+    timeout -k 2s 8s journalctl --no-pager "_UID=$uid" -n 100 || true
     exit 1
   fi
   if ! pgrep -u "$uid" -x nova-shell >/dev/null; then

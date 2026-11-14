@@ -449,8 +449,11 @@ with socket.create_connection(("127.0.0.1", 5906), timeout=5) as vnc:
         key(0xffe3, False)
         for char in value:
             tap(ord(char))
+    # #69 selected page text instead of the input: use an absolute tablet.
     click(240, 74)
+    time.sleep(.5)
     replace_text("nova-mouse-proof.deb")
+    time.sleep(.5)
     typed = frame("interaction-typed")
     click(830, 74)
     time.sleep(3)
@@ -539,7 +542,7 @@ run_one() {
     # Preserve both logs, but accept markers only from the dedicated probe.
     serial_args=(-serial "file:$OUTPUT/$mode-installed-console.log" -serial "file:$boot_log")
     monitor_socket="$OUTPUT/$mode-graphical-monitor.sock"
-    graphics_args=(-vga virtio -display none -vnc 127.0.0.1:6
+    graphics_args=(-vga virtio -device virtio-tablet-pci -display none -vnc 127.0.0.1:6
                    -monitor "unix:$monitor_socket,server=on,wait=off")
   fi
   "$QEMU" -machine q35 -accel "$ACCEL" -cpu max -m "$RAM_MIB" -smp "$CPUS" "${graphics_args[@]}" \

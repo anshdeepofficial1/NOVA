@@ -249,6 +249,45 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
     timeout -k 2s 8s loginctl list-sessions --no-legend || true
     exit 1
   fi
+  # G2: restart the actual display manager in this disposable CI guest.
+  # Require a different active Wayland session and compositor/shell PIDs;
+  # a surviving window or a successful restart job alone is not evidence.
+  old_session="$session_id"
+  old_kwin="$(pgrep -u "$uid" -x kwin_wayland | head -n 1)"
+  old_shell="$(pgrep -u "$uid" -x nova-shell | head -n 1)"
+  echo "NOVA_PHASE2_SESSION_RESTART_BEGIN session=$old_session kwin=$old_kwin shell=$old_shell"
+  timeout -k 5s 45s systemctl restart display-manager.service
+  restart_deadline=$((SECONDS + 180))
+  restarted=0
+  while (( SECONDS < restart_deadline )); do
+    new_kwin="$(timeout -k 1s 4s pgrep -u "$uid" -x kwin_wayland | head -n 1 || true)"
+    new_shell="$(timeout -k 1s 4s pgrep -u "$uid" -x nova-shell | head -n 1 || true)"
+    if [[ -n "$new_kwin" && -n "$new_shell" && "$new_kwin" != "$old_kwin" && "$new_shell" != "$old_shell" ]] &&
+       [[ ! -d "/proc/$old_kwin" && ! -d "/proc/$old_shell" ]] &&
+       ! timeout -k 1s 5s loginctl show-session "$old_session" >/dev/null 2>&1; then
+      while read -r new_session _; do
+        [[ -n "$new_session" && "$new_session" != "$old_session" ]] || continue
+        new_info="$(timeout -k 2s 6s loginctl show-session "$new_session" -p Name -p Type -p Active 2>/dev/null || true)"
+        if grep -Fxq 'Name=novatest' <<< "$new_info" &&
+           grep -Fxq 'Type=wayland' <<< "$new_info" &&
+           grep -Fxq 'Active=yes' <<< "$new_info"; then
+          restarted=1
+          break
+        fi
+      done < <(timeout -k 2s 6s loginctl list-sessions --no-legend 2>/dev/null || true)
+    fi
+    (( restarted == 1 )) && break
+    sleep 3
+  done
+  if (( restarted != 1 )); then
+    echo "NOVA_PHASE2_SESSION_RESTART_FAILED"
+    timeout -k 2s 8s loginctl list-sessions --no-legend || true
+    timeout -k 2s 8s journalctl --no-pager -u sddm.service -n 80 || true
+    exit 1
+  fi
+  echo "NOVA_PHASE2_SESSION_RESTART_OK old=$old_session new=$new_session kwin=$new_kwin shell=$new_shell"
+  # Existing user API, outage, overlay and framebuffer checks now exercise
+  # the restarted session rather than the initial login.
   # The earlier root-run health probe has stopped its temporary daemon.
   # Prove that the installed login session itself owns a working host API,
   # rather than accepting a nova-shell process with an offline UI.

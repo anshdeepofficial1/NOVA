@@ -425,6 +425,55 @@ with socket.create_connection(("127.0.0.1", 5906), timeout=5) as vnc:
     if moved < .05 or returned < .05 or residual >= moved*.5:
         raise RuntimeError("scroll did not produce a substantial reversible content change")
     print("NOVA_PHASE2_VNC_SCROLL_FRAME_CHANGE_OK", flush=True)
+    # Coordinates are grounded in independently reviewed #68's 1280x800
+    # scroll-down frame. Fail closed on a different geometry.
+    if (w, h) != (1280, 800):
+        raise RuntimeError("interaction coordinates require reviewed 1280x800 layout")
+    for _ in range(10):
+        pointer(16)
+        pointer(0)
+    time.sleep(1)
+    def click(px, py):
+        for mask in (0, 1, 0):
+            vnc.sendall(struct.pack(">BBHH", 5, mask, px, py))
+            time.sleep(.12)
+    def key(sym, down):
+        vnc.sendall(struct.pack(">BBHI", 4, int(down), 0, sym))
+        time.sleep(.04)
+    def tap(sym):
+        key(sym, True)
+        key(sym, False)
+    def replace_text(value):
+        key(0xffe3, True)
+        tap(ord("a"))
+        key(0xffe3, False)
+        for char in value:
+            tap(ord(char))
+    click(240, 74)
+    replace_text("nova-mouse-proof.deb")
+    typed = frame("interaction-typed")
+    click(830, 74)
+    time.sleep(3)
+    mouse_result = frame("interaction-mouse-result")
+    if difference(typed, mouse_result) < .015:
+        raise RuntimeError("mouse submit did not visibly change the inspector")
+    # The submit button retains focus after a click. Shift+Tab returns to
+    # the input without assuming its coordinates after the result expands.
+    key(0xffe1, True)
+    tap(0xff09)
+    key(0xffe1, False)
+    replace_text("nova-keyboard-proof.exe")
+    tap(0xff09)
+    tap(0xff0d)
+    time.sleep(3)
+    keyboard_result = frame("interaction-keyboard-result")
+    if difference(mouse_result, keyboard_result) < .005:
+        raise RuntimeError("keyboard submit did not visibly change the inspector")
+    tap(0xff1b)
+    frame("interaction-escape")
+    print("NOVA_PHASE2_VNC_INSPECTOR_FRAME_CHANGE_OK", flush=True)
+    # Frame changes are only a prefilter: independent review must confirm
+    # both exact filenames and the actual distinct runtime classifications.
 PY
 }
 
@@ -531,7 +580,7 @@ run_one() {
         printf 'mode=%s\nresult=FAIL\nstage=graphical_screenshot\n' "$mode" > "$result"
         return 1
       fi
-      if ! timeout -k 2s 45s bash -c "$(declare -f graphical_scroll_probe); graphical_scroll_probe \"\$1\" \"\$2\"" bash "$monitor_socket" "$OUTPUT/$mode" > "$OUTPUT/$mode-graphical-scroll.log" 2>&1; then
+      if ! timeout -k 2s 85s bash -c "$(declare -f graphical_scroll_probe); graphical_scroll_probe \"\$1\" \"\$2\"" bash "$monitor_socket" "$OUTPUT/$mode" > "$OUTPUT/$mode-graphical-scroll.log" 2>&1; then
         cat "$OUTPUT/$mode-graphical-scroll.log"
         printf 'mode=%s\nresult=FAIL\nstage=graphical_scroll\n' "$mode" > "$result"
         return 1

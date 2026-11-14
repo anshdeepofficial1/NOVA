@@ -259,6 +259,31 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
   # SDDM restart alone left the old user manager alive and the new seat
   # session inactive in run 43594865594. Drain the disposable test login
   # before starting SDDM again, as a full logout/login would do.
+  # Run #76 showed a plasmashell crash dialog after the forced teardown.
+  # Stop the KDE workspace through its own user manager before stopping
+  # SDDM, so dependent desktop services can shut down in dependency order.
+  # Do not suppress DrKonqi or delete crash records.
+  plasma_restart_since="$(date '+%Y-%m-%d %H:%M:%S')"
+  plasma_user_ctl() {
+    timeout -k 2s 25s runuser -u novatest -- env \
+      "XDG_RUNTIME_DIR=/run/user/$uid" \
+      "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
+      systemctl --user "$@"
+  }
+  plasma_restart_diagnostics() {
+    echo "NOVA_PHASE2_PLASMA_RESTART_DIAGNOSTICS_BEGIN"
+    timeout -k 2s 12s journalctl --no-pager --since "$plasma_restart_since" "_UID=$uid" -n 250 || true
+    timeout -k 2s 8s journalctl --no-pager --since "$plasma_restart_since" -t systemd-coredump -n 50 || true
+    timeout -k 2s 8s coredumpctl --no-pager --since "$plasma_restart_since" list || true
+    plasma_user_ctl --no-pager status plasma-plasmashell.service || true
+    ps -eo pid,ppid,uid,stat,args | grep -Ei 'plasmashell|drkonqi|kwin_wayland' || true
+    echo "NOVA_PHASE2_PLASMA_RESTART_DIAGNOSTICS_END"
+  }
+  if ! plasma_user_ctl stop plasma-workspace.target; then
+    plasma_restart_diagnostics
+    exit 1
+  fi
+  echo "NOVA_PHASE2_PLASMA_WORKSPACE_STOP_OK"
   timeout -k 5s 45s systemctl stop display-manager.service
   timeout -k 2s 15s loginctl terminate-user novatest
   logout_deadline=$((SECONDS + 45))
@@ -312,6 +337,16 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
     exit 1
   fi
   echo "NOVA_PHASE2_SESSION_RESTART_OK old=$old_session new=$new_session kwin=$new_kwin shell=$new_shell"
+  # A new compositor and NOVA process are not sufficient: #76 had both
+  # while a Plasma crash dialog intercepted real mouse input.
+  plasma_restart_diagnostics
+  if ! plasma_user_ctl is-active --quiet plasma-plasmashell.service ||
+     ! pgrep -u "$uid" -x plasmashell >/dev/null ||
+     pgrep -u "$uid" -f '[d]rkonqi' >/dev/null; then
+    echo "NOVA_PHASE2_PLASMA_RESTART_UNHEALTHY"
+    exit 1
+  fi
+  echo "NOVA_PHASE2_PLASMA_RESTART_HEALTH_OK"
   # Existing user API, outage, overlay and framebuffer checks now exercise
   # the restarted session rather than the initial login.
   # The earlier root-run health probe has stopped its temporary daemon.

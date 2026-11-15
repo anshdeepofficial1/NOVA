@@ -618,6 +618,55 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
     exit 1
   fi
   echo "NOVA_PHASE2_WELCOME_SUPPRESSED_OK"
+  # G2: exercise a second real systemd user manager concurrently with
+  # the graphical login. A shared loopback listener is not per-user isolation.
+  # This account exists only on the disposable CI graphical disk.
+  test -f /etc/nova-phase2-ci-only
+  if id nova-isolation-test >/dev/null 2>&1; then
+    echo "NOVA_PHASE2_MULTIUSER_ACCOUNT_ALREADY_EXISTS"
+    exit 1
+  fi
+  useradd --create-home --shell /bin/bash nova-isolation-test
+  second_uid="$(id -u nova-isolation-test)"
+  test "$second_uid" != "$uid"
+  timeout -k 2s 20s systemctl start "user@$second_uid.service"
+  second_ctl() {
+    timeout -k 2s 8s runuser -u nova-isolation-test -- env \
+      "XDG_RUNTIME_DIR=/run/user/$second_uid" \
+      "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$second_uid/bus" \
+      systemctl --user "$@"
+  }
+  second_ctl start nova-daemon.service || true
+  first_pid="$(user_daemon_ctl show --value -p MainPID)"
+  second_ready=0
+  for attempt in $(seq 1 15); do
+    second_pid="$(second_ctl show --value -p MainPID nova-daemon.service || true)"
+    if [[ "$second_pid" =~ ^[1-9][0-9]*$ ]] &&
+       [[ "$second_pid" != "$first_pid" ]] &&
+       [[ -d "/proc/$second_pid" ]] &&
+       [[ "$(stat -c %u "/proc/$second_pid")" == "$second_uid" ]] &&
+       second_ctl is-active --quiet nova-daemon.service; then
+      second_ready=1
+      break
+    fi
+    sleep 1
+  done
+  echo "NOVA_PHASE2_MULTIUSER_DAEMON_PIDS first=$first_pid second=${second_pid:-none}"
+  second_ctl show -p MainPID -p ActiveState -p SubState -p NRestarts -p Result nova-daemon.service || true
+  timeout -k 2s 8s journalctl --no-pager "_UID=$second_uid" -u "user@$second_uid.service" -n 60 || true
+  timeout -k 2s 8s journalctl --no-pager "_UID=$second_uid" _SYSTEMD_USER_UNIT=nova-daemon.service -n 60 || true
+  timeout -k 2s 8s ss -ltnp 'sport = :47820' || true
+  # A second account must not silently reuse the first user's API.
+  # This probe intentionally fails the current shared-port implementation;
+  # a future isolated transport needs its own per-user API assertions.
+  if (( second_ready != 1 )); then
+    echo "NOVA_PHASE2_MULTIUSER_DAEMON_ISOLATION_FAILED"
+    exit 1
+  fi
+  echo "NOVA_PHASE2_MULTIUSER_TRANSPORT_UNVERIFIED"
+  second_ctl stop nova-daemon.service
+  timeout -k 2s 15s systemctl stop "user@$second_uid.service"
+  user_daemon_ctl is-active --quiet
   echo "NOVA_PHASE2_GRAPHICAL_SESSION_OK"
   # Emit the final acceptance marker before the screenshot grace period.
   # The host checks the screenshot before accepting this marker and waits

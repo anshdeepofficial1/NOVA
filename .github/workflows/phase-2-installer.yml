@@ -71,10 +71,8 @@ jobs:
           if [[ -n "$REQUESTED_RUN" ]]; then
             run="$REQUESTED_RUN"
           else
-            source_branch="main"
-            if [[ "${{ github.ref_name }}" == "work/phase2-integrated-vm-acceptance" ]]; then
-              source_branch="work/phase2-integrated-vm-acceptance"
-            fi
+            source_branch="${{ github.ref_name }}"
+            [[ "$source_branch" == main || "$source_branch" == "work/phase2-integrated-vm-acceptance" ]] || { echo "::error::Unsupported acceptance branch"; exit 1; }
             run="$(gh run list --workflow build-iso.yml --branch "$source_branch" --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
           fi
           [[ "$run" =~ ^[0-9]+$ ]] || { echo "No successful ISO workflow run found"; exit 1; }
@@ -184,7 +182,6 @@ jobs:
             ${{ runner.temp }}/nova-installed-btrfs-layout/*-result.txt
             ${{ runner.temp }}/nova-installed-graphical/*.log
             ${{ runner.temp }}/nova-installed-graphical/*-result.txt
-            ${{ runner.temp }}/nova-installed-graphical/*-graphical-session.ppm
-            ${{ runner.temp }}/nova-installed-graphical/*-graphical-offline.ppm
+            ${{ runner.temp }}/nova-installed-graphical/*.ppm
           if-no-files-found: warn
           retention-days: 14

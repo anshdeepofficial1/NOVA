@@ -113,7 +113,6 @@ async fn daemon_request(path: String, body: Option<String>) -> Result<serde_json
     Ok(payload)
 }
 
-
 /// Check whether NOVA's user-session service is already running.
 ///
 /// The ISO enables the daemon as a user service. The packaged desktop can

@@ -1,5 +1,4 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
 use std::{
     io::{Read, Write},
     net::{SocketAddr, TcpStream},
@@ -24,7 +23,8 @@ fn private_endpoint() -> Result<Option<(SocketAddr, String)>, String> {
     let runtime = PathBuf::from(runtime);
     let uid = fs::metadata("/proc/self").map_err(|e| e.to_string())?.uid();
     let meta = fs::symlink_metadata(&runtime).map_err(|e| e.to_string())?;
-    if !runtime.is_absolute() || !meta.is_dir() || meta.uid() != uid || meta.mode() & 0o777 != 0o700 {
+    if !runtime.is_absolute() || !meta.is_dir() || meta.uid() != uid || meta.mode() & 0o777 != 0o700
+    {
         return Err("Unsafe NOVA runtime directory".into());
     }
     let path = runtime.join("nova-endpoint.json");
@@ -36,13 +36,20 @@ fn private_endpoint() -> Result<Option<(SocketAddr, String)>, String> {
     if !meta.is_file() || meta.uid() != uid || meta.mode() & 0o777 != 0o600 || meta.len() > 4096 {
         return Err("Unsafe NOVA endpoint file".into());
     }
-    let data: serde_json::Value = serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
-    let address: SocketAddr = data["address"].as_str().ok_or("Missing address")?
-        .parse().map_err(|_| "Invalid address")?;
+    let data: serde_json::Value =
+        serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    let address: SocketAddr = data["address"]
+        .as_str()
+        .ok_or("Missing address")?
+        .parse()
+        .map_err(|_| "Invalid address")?;
     let token = data["token"].as_str().ok_or("Missing token")?;
     if address.ip() != std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
-        || address.port() == 0 || token.len() != 64 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
+        || address.port() == 0
+        || token.len() != 64
+        || !token.bytes().all(|b| b.is_ascii_hexdigit())
+    {
         return Err("Invalid NOVA private endpoint".into());
     }
     Ok(Some((address, token.to_owned())))
@@ -70,21 +77,38 @@ async fn daemon_request(path: String, body: Option<String>) -> Result<serde_json
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(5))
-        .build().map_err(|e| e.to_string())?;
+        .build()
+        .map_err(|e| e.to_string())?;
     let url = format!("http://{address}{path}");
     let request = match (path.as_str(), body) {
         ("/health" | "/api/system", None) => client.get(url),
-        ("/api/compatibility/inspect", Some(body)) if body.len() <= 8192 =>
-            client.post(url).header("Content-Type", "application/json").body(body),
+        ("/api/compatibility/inspect", Some(body)) if body.len() <= 8192 => client
+            .post(url)
+            .header("Content-Type", "application/json")
+            .body(body),
         _ => return Err("Unsupported NOVA API operation".into()),
     };
-    let request = if let Some(token) = token { request.bearer_auth(token) } else { request };
-    let response = request.send().await.map_err(|_| "NOVA host service unavailable")?;
+    let request = if let Some(token) = token {
+        request.bearer_auth(token)
+    } else {
+        request
+    };
+    let response = request
+        .send()
+        .await
+        .map_err(|_| "NOVA host service unavailable")?;
     let status = response.status();
-    let bytes = response.bytes().await.map_err(|_| "Invalid NOVA response")?;
-    let payload: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| "Invalid NOVA response")?;
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|_| "Invalid NOVA response")?;
+    let payload: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| "Invalid NOVA response")?;
     if !status.is_success() {
-        return Err(payload["error"].as_str().unwrap_or("NOVA request failed").to_owned());
+        return Err(payload["error"]
+            .as_str()
+            .unwrap_or("NOVA request failed")
+            .to_owned());
     }
     Ok(payload)
 }
@@ -96,15 +120,21 @@ async fn daemon_request(path: String, body: Option<String>) -> Result<serde_json
 /// also be installed on an ordinary Linux desktop, where it starts its own
 /// bundled sidecar only when no healthy NOVA daemon is listening.
 fn nova_daemon_is_healthy() -> bool {
-    let Ok((address, token)) = daemon_endpoint() else { return false; };
+    let Ok((address, token)) = daemon_endpoint() else {
+        return false;
+    };
     let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(250)) else {
         return false;
     };
 
     let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
 
-    let authorization = token.map(|token| format!("Authorization: Bearer {token}\r\n")).unwrap_or_default();
-    let request = format!("GET /health HTTP/1.1\r\nHost: {address}\r\n{authorization}Connection: close\r\n\r\n");
+    let authorization = token
+        .map(|token| format!("Authorization: Bearer {token}\r\n"))
+        .unwrap_or_default();
+    let request = format!(
+        "GET /health HTTP/1.1\r\nHost: {address}\r\n{authorization}Connection: close\r\n\r\n"
+    );
     if stream.write_all(request.as_bytes()).is_err() {
         return false;
     }

@@ -509,17 +509,27 @@ with socket.create_connection(("127.0.0.1", 5906), timeout=5) as vnc:
     mouse_result = frame("interaction-mouse-result")
     if difference(typed, mouse_result) < .015:
         raise RuntimeError("mouse submit did not visibly change the inspector")
-    # The submit button retains focus after a click. Shift+Tab returns to
-    # the input without assuming its coordinates after the result expands.
-    key(0xffe1, True)
-    tap(0xff09)
-    key(0xffe1, False)
+    # #82 shows the input still at the same coordinates after mouse
+    # submission, but Shift+Tab from the asynchronously disabled button
+    # moved focus outside the form. Explicitly reacquire input focus.
+    click(240, 74)
+    time.sleep(.5)
+    keyboard_pretype = frame("interaction-keyboard-pretype")
     replace_text("nova-keyboard-proof.exe")
+    time.sleep(.5)
+    keyboard_typed = frame("interaction-keyboard-typed")
+    keyboard_input_change = region_change(keyboard_pretype, keyboard_typed, 110, 60, 760, 90)
+    keyboard_outside_change = region_change(keyboard_pretype, keyboard_typed, 40, 130, 1230, 730)
+    print(f"KEYBOARD_INPUT_CHANGE={keyboard_input_change:.4f} OUTSIDE_CHANGE={keyboard_outside_change:.4f}", flush=True)
+    if keyboard_input_change < .005 or keyboard_outside_change > .01:
+        raise RuntimeError("keyboard typing did not stay localized to the inspector input")
     tap(0xff09)
+    time.sleep(.3)
+    frame("interaction-keyboard-tab")
     tap(0xff0d)
     time.sleep(3)
     keyboard_result = frame("interaction-keyboard-result")
-    if difference(mouse_result, keyboard_result) < .005:
+    if difference(keyboard_typed, keyboard_result) < .005:
         raise RuntimeError("keyboard submit did not visibly change the inspector")
     tap(0xff1b)
     frame("interaction-escape")

@@ -369,6 +369,36 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
   echo "NOVA_PHASE2_SESSION_RESTART_OK old=$old_session new=$new_session kwin=$new_kwin shell=$new_shell"
   # A new compositor and NOVA process are not sufficient: #76 had both
   # while a Plasma crash dialog intercepted real mouse input.
+  # Let the restarted workspace settle too. Run #78 reached a healthy
+  # session but sampled it just four seconds after plasmashell started.
+  restarted_plasma_stable=0
+  restarted_plasma_previous=""
+  restarted_plasma_deadline=$((SECONDS + 120))
+  while (( SECONDS < restarted_plasma_deadline )); do
+    restarted_plasma_pid="$(pgrep -u "$uid" -x plasmashell | head -n 1 || true)"
+    if [[ -n "$restarted_plasma_pid" ]] &&
+       [[ "$restarted_plasma_pid" != "$plasma_previous_pid" ]] &&
+       plasma_user_ctl is-active --quiet plasma-plasmashell.service &&
+       plasma_user_ctl is-active --quiet plasma-workspace.target; then
+      if [[ "$restarted_plasma_pid" == "$restarted_plasma_previous" ]]; then
+        restarted_plasma_stable=$((restarted_plasma_stable + 1))
+      else
+        restarted_plasma_stable=0
+      fi
+      restarted_plasma_previous="$restarted_plasma_pid"
+      (( restarted_plasma_stable >= 30 )) && break
+    else
+      restarted_plasma_stable=0
+      restarted_plasma_previous=""
+    fi
+    sleep 1
+  done
+  if (( restarted_plasma_stable < 30 )); then
+    echo "NOVA_PHASE2_PLASMA_RESTART_SETTLE_FAILED"
+    plasma_restart_diagnostics
+    exit 1
+  fi
+  echo "NOVA_PHASE2_PLASMA_RESTART_SETTLED pid=$restarted_plasma_previous"
   plasma_restart_diagnostics
   # Reject a real Plasma core dump even if the crash handler has exited.
   if ! plasma_cores="$(timeout -k 2s 8s coredumpctl --no-pager --since "$plasma_restart_since" list /usr/bin/plasmashell 2>&1)"; then
@@ -381,9 +411,13 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
     echo "NOVA_PHASE2_PLASMA_COREDUMP_FOUND"
     exit 1
   fi
+  # KDE normally runs drkonqi-coredump-processor in the background.
+  # Run #78 had no coredumps and active plasmashell, but the broad argv
+  # search matched that normal processor. Match only the actual drkonqi
+  # dialog process (exact comm), and retain the independent coredump gate.
   if ! plasma_user_ctl is-active --quiet plasma-plasmashell.service ||
      ! pgrep -u "$uid" -x plasmashell >/dev/null ||
-     pgrep -u "$uid" -f '[d]rkonqi' >/dev/null; then
+     pgrep -u "$uid" -x drkonqi >/dev/null; then
     echo "NOVA_PHASE2_PLASMA_RESTART_UNHEALTHY"
     exit 1
   fi

@@ -151,8 +151,115 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(cors)
         .layer(TraceLayer::new_for_http());
 
+    if !address.ip().is_loopback() {
+        return Err("NOVA_BIND must be loopback".into());
+    }
+    // Opt-in migration path: clients discover a private, authenticated endpoint.
+    // Keep legacy mode until the packaged shell and guest probes migrate together.
+    #[cfg(target_os = "linux")]
+    if env::var_os("NOVA_PRIVATE_ENDPOINT").is_some() {
+        return serve_private(app).await;
+    }
+
     let listener = tokio::net::TcpListener::bind(address).await?;
     tracing::info!(%address, "NOVA host API listening");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+async fn serve_private(app: Router) -> Result<(), Box<dyn std::error::Error>> {
+    use axum::{
+        extract::Request,
+        middleware::{self, Next},
+    };
+    use std::{
+        fs::{self, OpenOptions},
+        io::{Read, Write},
+        os::unix::fs::{MetadataExt, OpenOptionsExt},
+        path::PathBuf,
+    };
+
+    let runtime = PathBuf::from(env::var_os("XDG_RUNTIME_DIR").ok_or("missing XDG_RUNTIME_DIR")?);
+    let metadata = fs::symlink_metadata(&runtime)?;
+    let uid = fs::metadata("/proc/self")?.uid();
+    if !runtime.is_absolute()
+        || !metadata.is_dir()
+        || metadata.uid() != uid
+        || metadata.mode() & 0o777 != 0o700
+    {
+        return Err("unsafe XDG_RUNTIME_DIR".into());
+    }
+
+    let mut random = [0u8; 32];
+    fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
+    let token: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let expected = format!("Bearer {token}");
+    let app = app.layer(middleware::from_fn(move |request: Request, next: Next| {
+        let expected = expected.clone();
+        async move {
+            let valid = request
+                .headers()
+                .get(header::AUTHORIZATION)
+                .is_some_and(|value| token_matches(value.as_bytes(), expected.as_bytes()));
+            if !valid {
+                return StatusCode::UNAUTHORIZED.into_response();
+            }
+            next.run(request).await
+        }
+    }));
+
+    // Publish atomically; never follow an existing endpoint symlink or expose
+    // the bearer token in logs, process arguments, or a world-readable file.
+    let temporary = runtime.join(format!(".nova-endpoint-{token}"));
+    let endpoint = runtime.join("nova-endpoint.json");
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temporary)?;
+    let publish = (|| -> Result<(), Box<dyn std::error::Error>> {
+        serde_json::to_writer(
+            &mut file,
+            &serde_json::json!({
+                "address": address.to_string(),
+                "token": token
+            }),
+        )?;
+        file.flush()?;
+        fs::rename(&temporary, &endpoint)?;
+        Ok(())
+    })();
+    if publish.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    publish?;
+    tracing::info!(%address, "NOVA authenticated user API listening");
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn token_matches(actual: &[u8], expected: &[u8]) -> bool {
+    actual.len() == expected.len()
+        && actual
+            .iter()
+            .zip(expected)
+            .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+            == 0
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod transport_tests {
+    use super::token_matches;
+
+    #[test]
+    fn bearer_comparison_rejects_missing_wrong_and_truncated_tokens() {
+        assert!(token_matches(b"Bearer abc", b"Bearer abc"));
+        assert!(!token_matches(b"", b"Bearer abc"));
+        assert!(!token_matches(b"Bearer abd", b"Bearer abc"));
+        assert!(!token_matches(b"Bearer ab", b"Bearer abc"));
+    }
 }

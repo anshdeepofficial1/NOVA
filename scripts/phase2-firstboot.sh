@@ -140,7 +140,7 @@ echo "NOVA_PHASE2_DESKTOP_PACKAGES_OK"
 log=/run/nova-phase2-daemon.log
 # Avoid racing the actual graphical user service for its production port.
 # The temporary root probe is isolated; the graphical checks below still
-# require the real user service on its unchanged production port 47820.
+# require the real user service via its authenticated private endpoint.
 probe_port=47820
 if [[ -f /etc/nova-phase2-ci-graphical ]]; then
   probe_port=47821
@@ -430,18 +430,34 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
   assert_binary runuser
   user_service_ready=0
   echo "NOVA_PHASE2_USER_DAEMON_WAIT_BEGIN"
+  # Run authenticated requests as the actual account; never put tokens in argv/logs.
+  user_api() {
+    local account="$1" route="$2"
+    timeout -k 2s 6s runuser -u "$account" -- python3 - "$route" <<'PYAPI'
+import json, os, pathlib, stat, sys, urllib.request
+runtime = pathlib.Path("/run/user") / str(os.getuid())
+endpoint = runtime / "nova-endpoint.json"
+for path, mode in ((runtime, 0o700), (endpoint, 0o600)):
+    info = path.lstat()
+    assert info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == mode
+    assert not path.is_symlink()
+data = json.loads(endpoint.read_text())
+address = data["address"]
+assert address.startswith("127.0.0.1:") and 0 < int(address.split(":")[1]) < 65536
+request = urllib.request.Request("http://" + address + sys.argv[1],
+                                 headers={"Authorization": "Bearer " + data["token"]})
+with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=2) as response:
+    print(response.read().decode())
+PYAPI
+  }
   for attempt in $(seq 1 45); do
     if timeout -k 2s 5s runuser -u novatest -- env \
          "XDG_RUNTIME_DIR=/run/user/$uid" \
          "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
          systemctl --user is-active --quiet nova-daemon.service &&
-       curl --fail --silent --max-time 2 \
-         -H 'Origin: http://tauri.localhost' \
-         -D /run/nova-phase2-user-api-headers \
-         http://127.0.0.1:47820/health > /run/nova-phase2-user-health.json &&
+       user_api novatest /health > /run/nova-phase2-user-health.json &&
        grep -Fq '"service":"nova-daemon"' /run/nova-phase2-user-health.json &&
-       grep -Fiq 'access-control-allow-origin: http://tauri.localhost' /run/nova-phase2-user-api-headers &&
-       curl --fail --silent --max-time 2 http://127.0.0.1:47820/api/system |
+       user_api novatest /api/system |
          grep -Fq '"product":"NOVA OS"'; then
       user_service_ready=1
       break
@@ -452,7 +468,7 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
     sleep 1
   done
   if (( user_service_ready != 1 )); then
-    echo "NOVA user-session daemon or Tauri-origin API unavailable after Wayland login"
+    echo "NOVA user-session daemon or authenticated API unavailable after Wayland login"
     timeout -k 2s 8s runuser -u novatest -- env \
       "XDG_RUNTIME_DIR=/run/user/$uid" \
       "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
@@ -489,12 +505,8 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
        [[ "$recovered_pid" != "$user_service_pid" ]] &&
        [[ -d "/proc/$recovered_pid" ]] &&
        [[ "$(stat -c %u "/proc/$recovered_pid")" == "$uid" ]] &&
-       curl --fail --silent --max-time 2 \
-         -H 'Origin: http://tauri.localhost' \
-         -D /run/nova-phase2-recovered-api-headers \
-         http://127.0.0.1:47820/health > /run/nova-phase2-recovered-health.json &&
-       grep -Fq '"service":"nova-daemon"' /run/nova-phase2-recovered-health.json &&
-       grep -Fiq 'access-control-allow-origin: http://tauri.localhost' /run/nova-phase2-recovered-api-headers; then
+       user_api novatest /health > /run/nova-phase2-recovered-health.json &&
+       grep -Fq '"service":"nova-daemon"' /run/nova-phase2-recovered-health.json; then
       recovered=1
       break
     fi
@@ -525,7 +537,7 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
   outage_stopped=0
   for attempt in $(seq 1 15); do
     if ! user_daemon_ctl is-active --quiet &&
-       ! curl --fail --silent --max-time 2 http://127.0.0.1:47820/health >/dev/null; then
+       ! user_api novatest /health >/dev/null 2>&1; then
       outage_stopped=1
       break
     fi
@@ -534,7 +546,7 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
   if (( outage_stopped != 1 )); then
     echo "NOVA_PHASE2_USER_DAEMON_OUTAGE_FAILED"
     user_daemon_ctl show -p MainPID -p ActiveState -p SubState -p NRestarts -p Result || true
-    timeout -k 2s 8s ss -ltnp 'sport = :47820' || true
+    timeout -k 2s 8s ss -ltnp || true
     timeout -k 2s 8s ps -eo pid,ppid,uid,stat,args | grep -E 'nova-daemon|nova-shell' || true
     timeout -k 2s 8s journalctl --no-pager "_UID=$uid" -n 100 || true
     exit 1
@@ -549,7 +561,7 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
   sleep 20
   echo "NOVA_PHASE2_OFFLINE_FRAME_READY"
   sleep 45
-  if curl --fail --silent --max-time 2 http://127.0.0.1:47820/health >/dev/null; then
+  if user_api novatest /health >/dev/null 2>&1; then
     echo "NOVA_PHASE2_OUTAGE_ENDED_PREMATURELY"
     exit 1
   fi
@@ -557,12 +569,8 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
   user_daemon_ctl start
   outage_recovered=0
   for attempt in $(seq 1 30); do
-    if curl --fail --silent --max-time 2 \
-         -H 'Origin: http://tauri.localhost' \
-         -D /run/nova-phase2-outage-api-headers \
-         http://127.0.0.1:47820/health > /run/nova-phase2-outage-health.json &&
+    if user_api novatest /health > /run/nova-phase2-outage-health.json &&
        grep -Fq '"service":"nova-daemon"' /run/nova-phase2-outage-health.json &&
-       grep -Fiq 'access-control-allow-origin: http://tauri.localhost' /run/nova-phase2-outage-api-headers &&
        pgrep -u "$uid" -x nova-shell >/dev/null; then
       outage_recovered=1
       break
@@ -645,7 +653,8 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
        [[ "$second_pid" != "$first_pid" ]] &&
        [[ -d "/proc/$second_pid" ]] &&
        [[ "$(stat -c %u "/proc/$second_pid")" == "$second_uid" ]] &&
-       second_ctl is-active --quiet nova-daemon.service; then
+       second_ctl is-active --quiet nova-daemon.service &&
+       user_api nova-isolation-test /health | grep -Fq '"service":"nova-daemon"'; then
       second_ready=1
       break
     fi
@@ -655,18 +664,40 @@ if [[ -f /etc/nova-phase2-ci-graphical ]]; then
   second_ctl show -p MainPID -p ActiveState -p SubState -p NRestarts -p Result nova-daemon.service || true
   timeout -k 2s 8s journalctl --no-pager "_UID=$second_uid" -u "user@$second_uid.service" -n 60 || true
   timeout -k 2s 8s journalctl --no-pager "_UID=$second_uid" _SYSTEMD_USER_UNIT=nova-daemon.service -n 60 || true
-  timeout -k 2s 8s ss -ltnp 'sport = :47820' || true
+  timeout -k 2s 8s ss -ltnp || true
   # A second account must not silently reuse the first user's API.
-  # This probe intentionally fails the current shared-port implementation;
-  # a future isolated transport needs its own per-user API assertions.
   if (( second_ready != 1 )); then
     echo "NOVA_PHASE2_MULTIUSER_DAEMON_ISOLATION_FAILED"
     exit 1
   fi
-  echo "NOVA_PHASE2_MULTIUSER_TRANSPORT_UNVERIFIED"
+  # Verify both endpoints independently and reject cross-account credentials.
+  user_api novatest /api/system | grep -Fq '"product":"NOVA OS"'
+  user_api nova-isolation-test /api/system | grep -Fq '"product":"NOVA OS"'
+  python3 - "$uid" "$second_uid" <<'PYISOLATION'
+import json, pathlib, subprocess, sys, urllib.error, urllib.request
+uids = sys.argv[1:]
+paths = [pathlib.Path("/run/user") / uid / "nova-endpoint.json" for uid in uids]
+data = [json.loads(path.read_text()) for path in paths]
+assert data[0]["address"] != data[1]["address"]
+assert data[0]["token"] != data[1]["token"]
+for i, account in enumerate(("novatest", "nova-isolation-test")):
+    other = 1 - i
+    assert subprocess.run(["runuser", "-u", account, "--", "test", "-r", str(paths[other])]).returncode == 1
+    for token in (None, data[i]["token"]):
+        headers = {} if token is None else {"Authorization": "Bearer " + token}
+        request = urllib.request.Request("http://" + data[other]["address"] + "/health", headers=headers)
+        try:
+            urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=2)
+        except urllib.error.HTTPError as error:
+            assert error.code == 401
+        else:
+            raise AssertionError("cross-account or unauthenticated request accepted")
+PYISOLATION
+  echo "NOVA_PHASE2_MULTIUSER_AUTHENTICATED_ISOLATION_OK"
   second_ctl stop nova-daemon.service
   timeout -k 2s 15s systemctl stop "user@$second_uid.service"
   user_daemon_ctl is-active --quiet
+  user_api novatest /health | grep -Fq '"service":"nova-daemon"'
   echo "NOVA_PHASE2_GRAPHICAL_SESSION_OK"
   # Emit the final acceptance marker before the screenshot grace period.
   # The host checks the screenshot before accepting this marker and waits

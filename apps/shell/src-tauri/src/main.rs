@@ -55,13 +55,18 @@ fn private_endpoint() -> Result<Option<(SocketAddr, String)>, String> {
     Ok(Some((address, token.to_owned())))
 }
 
+fn requires_private_endpoint() -> bool {
+    std::env::var_os("NOVA_PRIVATE_ENDPOINT").is_some()
+        || std::path::Path::new("/etc/nova-private-endpoint").is_file()
+}
+
 fn daemon_endpoint() -> Result<(SocketAddr, Option<String>), String> {
     #[cfg(target_os = "linux")]
     {
         if let Some((address, token)) = private_endpoint()? {
             return Ok((address, Some(token)));
         }
-        if std::env::var_os("NOVA_PRIVATE_ENDPOINT").is_some() {
+        if requires_private_endpoint() {
             return Err("Private NOVA daemon is not ready".into());
         }
     }
@@ -187,6 +192,12 @@ fn main() {
         .setup(|app| {
             if wait_for_existing_daemon() {
                 eprintln!("NOVA host service is already running; reusing it.");
+                return Ok(());
+            }
+
+            // Installed NOVA uses the systemd user service exclusively.
+            if requires_private_endpoint() {
+                eprintln!("NOVA user service unavailable; waiting for systemd recovery.");
                 return Ok(());
             }
 

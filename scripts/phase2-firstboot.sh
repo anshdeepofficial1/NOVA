@@ -698,6 +698,14 @@ PYISOLATION
   timeout -k 2s 15s systemctl stop "user@$second_uid.service"
   user_daemon_ctl is-active --quiet
   user_api novatest /health | grep -Fq '"service":"nova-daemon"'
+  # Record actual guest uptime and process resource usage, not host QEMU RSS.
+  # This is a baseline sample, not a performance threshold or leak verdict.
+  echo "NOVA_PHASE2_GUI_RESOURCE_SAMPLE_BEGIN"
+  cat /proc/sys/kernel/random/boot_id
+  cat /proc/uptime
+  free -k
+  ps -u "$uid" -o pid,comm,etime,time,pcpu,rss --sort=pid
+  echo "NOVA_PHASE2_GUI_RESOURCE_SAMPLE_END"
   echo "NOVA_PHASE2_GRAPHICAL_SESSION_OK"
   # Emit the final acceptance marker before the screenshot grace period.
   # The host checks the screenshot before accepting this marker and waits

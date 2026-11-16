@@ -700,6 +700,39 @@ run_one() {
             return 1
           fi
         done
+        # Require the final guest health check and both complete resource samples.
+        # Publish the bounded sample blocks in the job log as well as the ZIP,
+        # so evidence remains readable when artifact downloads are unavailable.
+        if ! grep -Fxq 'NOVA_PHASE2_GUI_POST_INTERACTION_HEALTH_OK' "$boot_log" ||
+           ! python3 - "$boot_log" <<'PYRESOURCE'
+import pathlib
+import re
+import sys
+
+lines = pathlib.Path(sys.argv[1]).read_text(errors="replace").splitlines()
+samples = []
+for phase in ("before_interaction", "after_interaction"):
+    begin = "NOVA_PHASE2_GUI_RESOURCE_SAMPLE_BEGIN phase=" + phase
+    end = "NOVA_PHASE2_GUI_RESOURCE_SAMPLE_END phase=" + phase
+    if lines.count(begin) != 1 or lines.count(end) != 1:
+        sys.exit("Missing or duplicate resource sample: " + phase)
+    start, stop = lines.index(begin), lines.index(end)
+    block = lines[start + 1:stop]
+    if len(block) < 5 or not re.fullmatch(r"[0-9a-f-]{36}", block[0]):
+        sys.exit("Incomplete resource sample: " + phase)
+    uptime = float(block[1].split()[0])
+    if not any(line.startswith("Mem:") for line in block):
+        sys.exit("Missing memory sample: " + phase)
+    samples.append((start, stop, block[0], uptime))
+    print("\\n".join(lines[start:stop + 1]))
+before, after = samples
+if not (before[1] < after[0] and before[2] == after[2] and after[3] > before[3]):
+    sys.exit("Resource samples do not describe one ordered guest boot")
+PYRESOURCE
+        then
+          printf 'mode=%s\\nresult=FAIL\\nstage=graphical_resource_evidence\\n' "$mode" > "$result"
+          return 1
+        fi
         if [[ "$screenshot_done" != true || "$offline_screenshot_done" != true ]]; then
           echo "FAIL: no verified graphical session screenshot" >&2
           printf 'mode=%s\nresult=FAIL\nstage=graphical_evidence\n' "$mode" > "$result"

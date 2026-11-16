@@ -698,25 +698,29 @@ PYISOLATION
   timeout -k 2s 15s systemctl stop "user@$second_uid.service"
   user_daemon_ctl is-active --quiet
   user_api novatest /health | grep -Fq '"service":"nova-daemon"'
-  # Record actual guest uptime and process resource usage, not host QEMU RSS.
-  # This is a baseline sample, not a performance threshold or leak verdict.
-  echo "NOVA_PHASE2_GUI_RESOURCE_SAMPLE_BEGIN"
-  cat /proc/sys/kernel/random/boot_id
-  cat /proc/uptime
-  free -k
-  ps -u "$uid" -o pid,comm,etime,time,pcpu,rss --sort=pid
-  echo "NOVA_PHASE2_GUI_RESOURCE_SAMPLE_END"
+  # Measure the installed guest before and after the host interaction window.
+  # These samples are observations, not an arbitrary leak/performance threshold.
+  gui_resource_sample() {
+    echo "NOVA_PHASE2_GUI_RESOURCE_SAMPLE_BEGIN phase=$1"
+    cat /proc/sys/kernel/random/boot_id
+    cat /proc/uptime
+    free -k
+    ps -u "$uid" -o pid,comm,etime,time,pcpu,rss --sort=pid
+    echo "NOVA_PHASE2_GUI_RESOURCE_SAMPLE_END phase=$1"
+  }
+  gui_resource_sample before_interaction
   echo "NOVA_PHASE2_GRAPHICAL_SESSION_OK"
-  # Emit the final acceptance marker before the screenshot grace period.
-  # The host checks the screenshot before accepting this marker and waits
-  # for clean shutdown, so this cannot bypass graphical evidence.
-  # Re-emit firmware evidence after startup chatter: UEFI kernel printk can
-  # splice into the initial serial line (observed VM run 43035665380).
+  # Keep the disposable guest alive for framebuffer and real input checks.
+  sleep 110
+  gui_resource_sample after_interaction
+  # Do not emit a pass before the interaction window and final health checks.
+  user_daemon_ctl is-active --quiet
+  user_api novatest /health | grep -Fq '"service":"nova-daemon"'
+  pgrep -u "$uid" -x kwin_wayland >/dev/null
+  pgrep -u "$uid" -x nova-shell >/dev/null
+  echo "NOVA_PHASE2_GUI_POST_INTERACTION_HEALTH_OK"
   echo "NOVA_PHASE2_FIRMWARE=$firmware"
   echo "NOVA_PHASE2_GUEST_PASS"
-  # Keep the disposable guest alive for the QEMU framebuffer capture.
-  # Allow the host to reject the initial Plasma splash and capture the desktop.
-  sleep 110
 else
   # Re-emit firmware evidence after startup chatter: UEFI kernel printk can
   # splice into the initial serial line (observed VM run 43035665380).

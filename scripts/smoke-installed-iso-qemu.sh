@@ -7,6 +7,9 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 ISO="$ROOT/os/debian-live/live-image-amd64.hybrid.iso"
 FIRMWARE="uefi"
 GRAPHICAL=false
+# Separate Full HD visual probe; never reuse 1280x800 interaction coordinates.
+FULLHD_VISUAL="${NOVA_PHASE2_FULLHD_VISUAL:-false}"
+[[ "$FULLHD_VISUAL" == true || "$FULLHD_VISUAL" == false ]] || exit 2
 FILESYSTEM="ext4"
 PRESERVE_SECONDARY=false
 BTRFS_LAYOUT=false
@@ -624,7 +627,11 @@ run_one() {
     # Preserve both logs, but accept markers only from the dedicated probe.
     serial_args=(-serial "file:$OUTPUT/$mode-installed-console.log" -serial "file:$boot_log")
     monitor_socket="$OUTPUT/$mode-graphical-monitor.sock"
-    graphics_args=(-vga virtio -device virtio-tablet-pci -display none -vnc 127.0.0.1:6
+    local video_args=(-vga virtio)
+    if [[ "$FULLHD_VISUAL" == true ]]; then
+      video_args=(-vga none -device virtio-vga,xres=1920,yres=1080)
+    fi
+    graphics_args=("${video_args[@]}" -device virtio-tablet-pci -display none -vnc 127.0.0.1:6
                    -monitor "unix:$monitor_socket,server=on,wait=off"
                    -qmp "unix:$monitor_socket.qmp,server=on,wait=off")
   fi
@@ -666,12 +673,33 @@ run_one() {
         printf 'mode=%s\nresult=FAIL\nstage=graphical_screenshot\n' "$mode" > "$result"
         return 1
       fi
-      if ! timeout -k 2s 85s bash -c "$(declare -f graphical_scroll_probe); graphical_scroll_probe \"\$1\" \"\$2\"" bash "$monitor_socket" "$OUTPUT/$mode" > "$OUTPUT/$mode-graphical-scroll.log" 2>&1; then
+      if [[ "$FULLHD_VISUAL" == true ]]; then
+        # Verify original QEMU framebuffer dimensions, not a scaled image.
+        if ! python3 - "$screenshot" <<'PYFULLHD'
+import sys
+with open(sys.argv[1], "rb") as stream:
+    assert stream.readline().strip() == b"P6"
+    line = stream.readline()
+    while line.startswith(b"#"):
+        line = stream.readline()
+    width, height = map(int, line.split())
+    if (width, height) != (1920, 1080):
+        sys.exit(f"Full HD framebuffer not established: {width}x{height}")
+    print(f"NOVA_PHASE2_FULLHD_FRAMEBUFFER={width}x{height}")
+PYFULLHD
+        then
+          printf 'mode=%s\nresult=FAIL\nstage=fullhd_resolution\n' "$mode" > "$result"
+          return 1
+        fi
+        echo "Full HD visual capture only; interaction proof belongs to the separate 1280x800 run."
+      else
+        if ! timeout -k 2s 85s bash -c "$(declare -f graphical_scroll_probe); graphical_scroll_probe \"\$1\" \"\$2\"" bash "$monitor_socket" "$OUTPUT/$mode" > "$OUTPUT/$mode-graphical-scroll.log" 2>&1; then
+          cat "$OUTPUT/$mode-graphical-scroll.log"
+          printf 'mode=%s\nresult=FAIL\nstage=graphical_scroll\n' "$mode" > "$result"
+          return 1
+        fi
         cat "$OUTPUT/$mode-graphical-scroll.log"
-        printf 'mode=%s\nresult=FAIL\nstage=graphical_scroll\n' "$mode" > "$result"
-        return 1
       fi
-      cat "$OUTPUT/$mode-graphical-scroll.log"
       screenshot_done=true
     fi
     if [[ -f "$boot_log" ]] && grep -Fq 'NOVA_PHASE2_GUEST_PASS' "$boot_log"; then

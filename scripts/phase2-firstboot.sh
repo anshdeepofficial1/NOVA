@@ -715,7 +715,10 @@ PYISOLATION
   gui_resource_sample before_interaction
   echo "NOVA_PHASE2_GRAPHICAL_SESSION_OK"
   # Keep the disposable guest alive for framebuffer and real input checks.
-  sleep 110
+  # Host budget: up to 5s polling + 15s settle + 25s capture + 120s
+  # interaction timeout. Run #94 powered off during the final reopen capture.
+  # Leave margin for scheduling; host still independently requires all frames.
+  sleep 190
   gui_resource_sample after_interaction
   # Do not emit a pass before the interaction window and final health checks.
   user_daemon_ctl is-active --quiet

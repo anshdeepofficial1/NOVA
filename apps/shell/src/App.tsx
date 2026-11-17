@@ -3,8 +3,8 @@ import { checkHealth, getSystemInfo, inspectPackage } from "./api";
 import type { CompatibilityPlan, SystemInfo } from "./types";
 
 const quickItems = [
-  { icon: "▦", name: "Apps", detail: "Application workspace" },
-  { icon: "⌕", name: "Search", detail: "Find apps and files" },
+  { icon: "▦", name: "Apps", detail: "Application workspace · planned" },
+  { icon: "⌕", name: "Search", detail: "Find apps and files · planned" },
   { icon: "▤", name: "Files", detail: "File manager · planned" },
   { icon: "⚙", name: "Settings", detail: "System settings · planned" }
 ];
@@ -24,6 +24,7 @@ export default function App() {
   const [plan, setPlan] = useState<CompatibilityPlan | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [workspaceNotice, setWorkspaceNotice] = useState("");
 
   const refresh = useCallback(async () => {
     const online = await checkHealth();
@@ -45,13 +46,21 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [refresh]);
 
+  function focusInspectorControl(id: string) {
+    const control = document.getElementById(id);
+    if (!control) return;
+    control.scrollIntoView({ block: "center", behavior: "instant" });
+    control.focus({ preventScroll: true });
+  }
+
   async function onInspect(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (busy || !input.trim()) return;
     setBusy(true);
     setError("");
     setPlan(null);
     try {
-      const result = await inspectPackage(input);
+      const result = await inspectPackage(input.trim());
       setPlan(result.plan);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not inspect this item.");
@@ -88,7 +97,12 @@ export default function App() {
               <h2>One workspace.<br /><em>Many ecosystems.</em></h2>
               <p>NOVA is building a bridge between native desktop apps, Android, Windows compatibility and the web—with clear boundaries for what works today.</p>
               <div className="hero-actions">
-                <button className="primary-button" onClick={() => document.getElementById("compat-input")?.focus()}>Inspect an app <span>↗</span></button>
+                <button id="inspect-app-action" className="primary-button" type="button" onClick={() => focusInspectorControl("compat-input")} onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    focusInspectorControl("compat-input");
+                  }
+                }}>Inspect an app <span>↗</span></button>
                 <span className="subtle-note">Early development · Not an installable OS yet</span>
               </div>
             </div>
@@ -103,22 +117,31 @@ export default function App() {
             <div className="section-heading"><div><p className="eyebrow">GET STARTED</p><h3>Your workspace</h3></div><span className="section-hint">Some modules are placeholders</span></div>
             <div className="quick-grid">
               {quickItems.map((item) => (
-                <button className="quick-card panel" key={item.name} onClick={() => setError(item.name + " is part of the planned desktop shell.")}>
+                <button className="quick-card panel" key={item.name} onClick={() => setWorkspaceNotice(item.name + " is not implemented yet. It is part of the planned desktop shell.")}>
                   <span className="quick-icon">{item.icon}</span><span className="quick-name">{item.name}</span><span className="quick-detail">{item.detail}</span><span className="quick-arrow">↗</span>
                 </button>
               ))}
             </div>
+            {workspaceNotice && <p className="empty-state" role="status">{workspaceNotice} <button type="button" className="text-button" onClick={() => setWorkspaceNotice("")}>Dismiss</button></p>}
           </section>
 
           <section className="section-block inspector-section" id="compatibility">
             <div className="section-heading"><div><p className="eyebrow">UNIVERSAL COMPATIBILITY</p><h3>App route inspector</h3></div><span className="section-hint">Planning only · no files are executed</span></div>
             <div className="panel inspector-card">
               <p className="inspector-copy">Enter a filename or web URL to see which runtime NOVA would use and the current implementation status.</p>
-              <form className="inspect-form" onSubmit={onInspect}>
+              <form className="inspect-form" onSubmit={onInspect} aria-busy={busy} onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setError("");
+                  focusInspectorControl("inspect-app-action");
+                }
+              }}>
                 <span className="input-symbol">⌘</span>
                 <input id="compat-input" value={input} onChange={(event) => setInput(event.target.value)} placeholder="app.apk, setup.exe, tool.deb or https://…" aria-label="File path or web URL" />
                 <button type="submit" disabled={busy || !input.trim()}>{busy ? "Checking…" : "Inspect route"}</button>
               </form>
+              {busy && <p className="empty-state" role="status">Checking route with the local service…</p>}
+              {!busy && !input.trim() && <p className="empty-state" role="status">Enter a filename or web URL to inspect.</p>}
               {error && <div className="error-message" role="alert">{error}</div>}
               {plan && (
                 <div className="plan-result" aria-live="polite">

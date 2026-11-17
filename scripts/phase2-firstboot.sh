@@ -2,7 +2,17 @@
 # CI-only first-boot probe. Installed exclusively into disposable QEMU disks.
 set -Eeuo pipefail
 
-exec > /dev/ttyS0 2>&1
+# Keep the graphical probe off the kernel/login console. The serial getty
+# reconfigures ttyS0 while Plasma starts; previous runs lost all probe output
+# immediately after its login prompt. ttyS1 is a dedicated CI-only UART.
+if [[ -f /etc/nova-phase2-ci-graphical ]]; then
+  test -c /dev/ttyS1
+  timeout -k 1s 5s stty -F /dev/ttyS1 115200 raw -echo clocal -crtscts
+  exec > /dev/ttyS1 2>&1
+  echo "NOVA_PHASE2_DEDICATED_PROBE_UART=ttyS1"
+else
+  exec > /dev/ttyS0 2>&1
+fi
 
 finish() {
   status="${1:-$?}"
@@ -49,6 +59,37 @@ if [[ -d /sys/firmware/efi ]]; then
   test -d /boot/efi/EFI
 else
   firmware=bios
+fi
+if [[ -s /etc/nova-phase2-expected-fstype ]]; then
+  expected_fstype="$(cat /etc/nova-phase2-expected-fstype)"
+  [[ "$root_fstype" == "$expected_fstype" ]] || {
+    echo "Installed root filesystem mismatch: expected $expected_fstype got $root_fstype"
+    exit 1
+  }
+  if [[ "$expected_fstype" == "btrfs" ]]; then
+    assert_binary btrfs
+    btrfs subvolume show / || {
+      echo "Btrfs root is not an actual subvolume"
+      exit 1
+    }
+    echo "NOVA_PHASE2_BTRFS_SUBVOLUME_OK"
+    if [[ -f /etc/nova-phase2-ci-snapshot-restore ]]; then
+      # Subvolumes and test-user data must survive the ISO-free disk reboot.
+      for mount_path in /home /.snapshots; do
+        mountpoint -q "$mount_path" || { echo "Missing persisted Btrfs mount: $mount_path"; exit 1; }
+        [[ "$(findmnt -n -o FSTYPE "$mount_path")" == btrfs ]] || exit 1
+        btrfs subvolume show "$mount_path" >/dev/null || exit 1
+      done
+      [[ "$(findmnt -n -o SOURCE /home)" == *"@home]" ]] || exit 1
+      [[ "$(findmnt -n -o SOURCE /.snapshots)" == *"@snapshots]" ]] || exit 1
+      grep -Fxq NOVA_PHASE2_HOME_COPY_OK /home/novatest/.nova-phase2-migration
+      btrfs subvolume show /.snapshots/baseline >/dev/null
+      grep -Fxq data_restore_verified /etc/nova-phase2-ci-snapshot-restore
+      echo "NOVA_PHASE2_BTRFS_LAYOUT_OK"
+      echo "NOVA_PHASE2_SNAPSHOT_RESTORE_DATA_OK"
+    fi
+  fi
+  echo "NOVA_PHASE2_STORAGE_POLICY_OK"
 fi
 echo "NOVA_PHASE2_ROOT_SOURCE=$root_source"
 echo "NOVA_PHASE2_ROOT_FSTYPE=$root_fstype"
@@ -97,7 +138,14 @@ echo "NOVA_PHASE2_DESKTOP_PACKAGES_OK"
 
 # Verify the installed host API responds. No development Vite server is used.
 log=/run/nova-phase2-daemon.log
-/usr/local/bin/nova-daemon > "$log" 2>&1 &
+# Avoid racing the actual graphical user service for its production port.
+# The temporary root probe is isolated; the graphical checks below still
+# require the real user service via its authenticated private endpoint.
+probe_port=47820
+if [[ -f /etc/nova-phase2-ci-graphical ]]; then
+  probe_port=47821
+fi
+NOVA_BIND="127.0.0.1:$probe_port" /usr/local/bin/nova-daemon > "$log" 2>&1 &
 daemon_pid=$!
 stop_daemon() {
   kill "$daemon_pid" 2>/dev/null || true
@@ -106,7 +154,7 @@ stop_daemon() {
 trap 'status=$?; stop_daemon; finish "$status"' EXIT
 ready=0
 for attempt in $(seq 1 30); do
-  if curl --fail --silent --show-error --max-time 2 http://127.0.0.1:47820/health >/run/nova-phase2-health.json 2>/dev/null; then
+  if curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:$probe_port/health" >/run/nova-phase2-health.json 2>/dev/null; then
     ready=1
     break
   fi
@@ -121,4 +169,568 @@ grep -qi 'ok' /run/nova-phase2-health.json
 stop_daemon
 trap finish EXIT
 echo "NOVA_PHASE2_DAEMON_HEALTH_OK"
-echo "NOVA_PHASE2_GUEST_PASS"
+
+# CI-ONLY graphical mode: the test account is autologged in solely on a
+# disposable guest disk. Do not infer a GUI from installed Debian packages.
+if [[ -f /etc/nova-phase2-ci-graphical ]]; then
+  systemctl is-active --quiet display-manager.service || {
+    echo "SDDM display manager is not active"
+    exit 1
+  }
+  test -s /usr/share/wayland-sessions/plasma.desktop
+  assert_binary pgrep
+  assert_binary loginctl
+  uid="$(id -u novatest)"
+  # Cap D-Bus/loginctl calls and the total GUI probe wall time. Run #42
+  # hung for 20 minutes after daemon health without reporting a GUI failure.
+  assert_binary timeout
+  graphical_ready=0
+  gui_deadline=$((SECONDS + 180))
+  gui_attempt=0
+  echo "NOVA_PHASE2_GUI_WAIT_BEGIN"
+  while (( SECONDS < gui_deadline )); do
+    gui_attempt=$((gui_attempt + 1))
+    # During Plasma startup loginctl/DBus can be expensive or congested.
+    # Poll cheap, user-owned processes first, then ask logind only when
+    # the actual compositor AND NOVA Desktop window process both exist.
+    kwin_ready=0
+    shell_ready=0
+    # Run #58 stalled after the first poll without a second heartbeat.
+    # Bound each /proc scan and expose exactly where the guest stops.
+    echo "NOVA_PHASE2_GUI_PROBE_BEGIN attempt=$gui_attempt"
+    if timeout -k 1s 4s pgrep -u "$uid" -x kwin_wayland >/dev/null; then kwin_ready=1; fi
+    echo "NOVA_PHASE2_GUI_KWIN_PROBED attempt=$gui_attempt ready=$kwin_ready"
+    if timeout -k 1s 4s pgrep -u "$uid" -x nova-shell >/dev/null; then shell_ready=1; fi
+    echo "NOVA_PHASE2_GUI_SHELL_PROBED attempt=$gui_attempt ready=$shell_ready"
+    # Capture the first compositor-without-shell transition immediately.
+    # VM #59 stopped after this exact state, before the next polling cycle;
+    # deferred failure-only diagnostics never executed. All commands are
+    # bounded and observational (no session mutation or synthetic pass).
+    if (( kwin_ready == 1 && shell_ready == 0 && gui_attempt <= 3 )); then
+      echo "NOVA_PHASE2_GUI_SHELL_MISSING_DIAGNOSTICS_BEGIN attempt=$gui_attempt"
+      timeout -k 1s 4s ps -eo pid,ppid,stat,user,comm --sort=pid | tail -n 45 || true
+      echo "NOVA_PHASE2_GUI_SHELL_MISSING_PS_DONE attempt=$gui_attempt"
+      timeout -k 1s 4s journalctl --no-pager -u sddm.service -n 25 || true
+      echo "NOVA_PHASE2_GUI_SHELL_MISSING_SDDM_DONE attempt=$gui_attempt"
+      timeout -k 1s 4s journalctl --no-pager _UID="$uid" -n 35 || true
+      echo "NOVA_PHASE2_GUI_SHELL_MISSING_USER_JOURNAL_DONE attempt=$gui_attempt"
+    fi
+    if (( gui_attempt == 1 || gui_attempt % 5 == 0 )); then
+      echo "NOVA_PHASE2_GUI_POLL attempt=$gui_attempt kwin=$kwin_ready shell=$shell_ready"
+    fi
+    if (( kwin_ready == 1 && shell_ready == 1 )); then
+      # One bounded loginctl read for session metadata instead of three
+      # independent show-session DBus round-trips per session.
+      while read -r session_id _; do
+        [[ "$session_id" =~ ^[0-9]+$ ]] || continue
+        session_info="$(timeout -k 2s 6s loginctl show-session "$session_id" -p Name -p Type -p Active 2>/dev/null || true)"
+        if grep -Fxq 'Name=novatest' <<< "$session_info" &&
+           grep -Fxq 'Type=wayland' <<< "$session_info" &&
+           grep -Fxq 'Active=yes' <<< "$session_info"; then
+          graphical_ready=1
+          echo "NOVA_PHASE2_GUI_SESSION_ID=$session_id"
+          echo "NOVA_PHASE2_GUI_SESSION_TYPE=wayland"
+          break
+        fi
+      done < <(timeout -k 2s 6s loginctl list-sessions --no-legend 2>/dev/null || true)
+    fi
+    if (( gui_attempt == 1 || gui_attempt % 5 == 0 )); then
+      echo "NOVA_PHASE2_GUI_POLL_COMPLETE attempt=$gui_attempt ready=$graphical_ready"
+    fi
+    (( graphical_ready == 1 )) && break
+    sleep 3
+  done
+  if (( graphical_ready != 1 )); then
+    echo "NOVA graphical Wayland login or shell did not become ready"
+    timeout -k 2s 8s ps -eo pid,ppid,stat,user,comm --sort=pid | tail -n 70 || true
+    timeout -k 2s 8s systemctl --no-pager status display-manager.service || true
+    timeout -k 2s 8s journalctl --no-pager -u sddm.service -n 70 || true
+    timeout -k 2s 8s journalctl --no-pager -u systemd-logind.service -n 40 || true
+    timeout -k 2s 8s loginctl list-sessions --no-legend || true
+    exit 1
+  fi
+  # G2: restart the actual display manager in this disposable CI guest.
+  # Require a different active Wayland session and compositor/shell PIDs;
+  # a surviving window or a successful restart job alone is not evidence.
+  old_session="$session_id"
+  old_kwin="$(pgrep -u "$uid" -x kwin_wayland | head -n 1)"
+  old_shell="$(pgrep -u "$uid" -x nova-shell | head -n 1)"
+  echo "NOVA_PHASE2_SESSION_RESTART_BEGIN session=$old_session kwin=$old_kwin shell=$old_shell"
+  # SDDM restart alone left the old user manager alive and the new seat
+  # session inactive in run 43594865594. Drain the disposable test login
+  # before starting SDDM again, as a full logout/login would do.
+  # Run #76 showed a plasmashell crash dialog after the forced teardown.
+  # Stop the KDE workspace through its own user manager before stopping
+  # SDDM, so dependent desktop services can shut down in dependency order.
+  # Do not suppress DrKonqi or delete crash records.
+  plasma_restart_since="$(date '+%Y-%m-%d %H:%M:%S')"
+  plasma_user_ctl() {
+    timeout -k 2s 25s runuser -u novatest -- env \
+      "XDG_RUNTIME_DIR=/run/user/$uid" \
+      "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
+      systemctl --user "$@"
+  }
+  plasma_restart_diagnostics() {
+    echo "NOVA_PHASE2_PLASMA_RESTART_DIAGNOSTICS_BEGIN"
+    timeout -k 2s 12s journalctl --no-pager --since "$plasma_restart_since" "_UID=$uid" -n 250 || true
+    timeout -k 2s 8s journalctl --no-pager --since "$plasma_restart_since" -t systemd-coredump -n 50 || true
+    timeout -k 2s 8s coredumpctl --no-pager --since "$plasma_restart_since" list || true
+    plasma_user_ctl --no-pager status plasma-plasmashell.service || true
+    ps -eo pid,ppid,uid,stat,args | grep -Ei 'plasmashell|drkonqi|kwin_wayland' || true
+    echo "NOVA_PHASE2_PLASMA_RESTART_DIAGNOSTICS_END"
+  }
+  # Run #77 stopped Plasma only seconds after startup, while the Vault
+  # applet was still initializing QML/QtDBus (core dump PID 1220).
+  # Require a stable workspace before exercising normal session teardown.
+  # Do not disable the applet or crash reporting.
+  plasma_stable=0
+  plasma_previous_pid=""
+  plasma_settle_deadline=$((SECONDS + 120))
+  while (( SECONDS < plasma_settle_deadline )); do
+    plasma_pid="$(pgrep -u "$uid" -x plasmashell | head -n 1 || true)"
+    if [[ -n "$plasma_pid" ]] &&
+       plasma_user_ctl is-active --quiet plasma-plasmashell.service &&
+       plasma_user_ctl is-active --quiet plasma-workspace.target; then
+      if [[ "$plasma_pid" == "$plasma_previous_pid" ]]; then
+        plasma_stable=$((plasma_stable + 1))
+      else
+        plasma_stable=0
+      fi
+      plasma_previous_pid="$plasma_pid"
+      (( plasma_stable >= 30 )) && break
+    else
+      plasma_stable=0
+      plasma_previous_pid=""
+    fi
+    sleep 1
+  done
+  if (( plasma_stable < 30 )); then
+    plasma_restart_diagnostics
+    exit 1
+  fi
+  echo "NOVA_PHASE2_PLASMA_INITIAL_SETTLED pid=$plasma_previous_pid"
+  if ! plasma_user_ctl stop plasma-workspace.target; then
+    plasma_restart_diagnostics
+    exit 1
+  fi
+  echo "NOVA_PHASE2_PLASMA_WORKSPACE_STOP_OK"
+  timeout -k 5s 45s systemctl stop display-manager.service
+  timeout -k 2s 15s loginctl terminate-user novatest
+  logout_deadline=$((SECONDS + 45))
+  while [[ -d "/proc/$old_kwin" || -d "/proc/$old_shell" ]] ||
+        systemctl is-active --quiet "user@$uid.service"; do
+    if (( SECONDS >= logout_deadline )); then
+      echo "NOVA_PHASE2_SESSION_LOGOUT_FAILED"
+      loginctl list-sessions --no-legend || true
+      exit 1
+    fi
+    sleep 1
+  done
+  echo "NOVA_PHASE2_SESSION_LOGOUT_OK"
+  timeout -k 5s 45s systemctl start display-manager.service
+  restart_deadline=$((SECONDS + 180))
+  restarted=0
+  while (( SECONDS < restart_deadline )); do
+    new_kwin="$(timeout -k 1s 4s pgrep -u "$uid" -x kwin_wayland | head -n 1 || true)"
+    new_shell="$(timeout -k 1s 4s pgrep -u "$uid" -x nova-shell | head -n 1 || true)"
+    if [[ -n "$new_kwin" && -n "$new_shell" && "$new_kwin" != "$old_kwin" && "$new_shell" != "$old_shell" ]] &&
+       [[ ! -d "/proc/$old_kwin" && ! -d "/proc/$old_shell" ]] &&
+       ! timeout -k 1s 5s loginctl show-session "$old_session" >/dev/null 2>&1; then
+      while read -r new_session _; do
+        [[ -n "$new_session" && "$new_session" != "$old_session" ]] || continue
+        new_info="$(timeout -k 2s 6s loginctl show-session "$new_session" -p Name -p Type -p Active 2>/dev/null || true)"
+        if grep -Fxq 'Name=novatest' <<< "$new_info" &&
+           grep -Fxq 'Type=wayland' <<< "$new_info"; then
+          # A restarted SDDM can allocate a different VT. Select the real
+          # new session, then independently require logind to report active.
+          if ! grep -Fxq 'Active=yes' <<< "$new_info"; then
+            timeout -k 2s 6s loginctl activate "$new_session" || true
+            new_info="$(timeout -k 2s 6s loginctl show-session "$new_session" -p Name -p Type -p Active 2>/dev/null || true)"
+          fi
+          grep -Fxq 'Name=novatest' <<< "$new_info" &&
+            grep -Fxq 'Type=wayland' <<< "$new_info" &&
+            grep -Fxq 'Active=yes' <<< "$new_info" || continue
+          restarted=1
+          break
+        fi
+      done < <(timeout -k 2s 6s loginctl list-sessions --no-legend 2>/dev/null || true)
+    fi
+    (( restarted == 1 )) && break
+    sleep 3
+  done
+  if (( restarted != 1 )); then
+    echo "NOVA_PHASE2_SESSION_RESTART_FAILED"
+    timeout -k 2s 8s ps -eo pid,ppid,stat,user,comm --sort=pid | tail -n 80 || true
+    timeout -k 2s 8s journalctl --no-pager "_UID=$uid" -n 100 || true
+    timeout -k 2s 8s loginctl list-sessions --no-legend || true
+    timeout -k 2s 8s journalctl --no-pager -u sddm.service -n 80 || true
+    exit 1
+  fi
+  echo "NOVA_PHASE2_SESSION_RESTART_OK old=$old_session new=$new_session kwin=$new_kwin shell=$new_shell"
+  # A new compositor and NOVA process are not sufficient: #76 had both
+  # while a Plasma crash dialog intercepted real mouse input.
+  # Let the restarted workspace settle too. Run #78 reached a healthy
+  # session but sampled it just four seconds after plasmashell started.
+  restarted_plasma_stable=0
+  restarted_plasma_previous=""
+  restarted_plasma_deadline=$((SECONDS + 120))
+  while (( SECONDS < restarted_plasma_deadline )); do
+    restarted_plasma_pid="$(pgrep -u "$uid" -x plasmashell | head -n 1 || true)"
+    if [[ -n "$restarted_plasma_pid" ]] &&
+       [[ "$restarted_plasma_pid" != "$plasma_previous_pid" ]] &&
+       plasma_user_ctl is-active --quiet plasma-plasmashell.service &&
+       plasma_user_ctl is-active --quiet plasma-workspace.target; then
+      if [[ "$restarted_plasma_pid" == "$restarted_plasma_previous" ]]; then
+        restarted_plasma_stable=$((restarted_plasma_stable + 1))
+      else
+        restarted_plasma_stable=0
+      fi
+      restarted_plasma_previous="$restarted_plasma_pid"
+      (( restarted_plasma_stable >= 30 )) && break
+    else
+      restarted_plasma_stable=0
+      restarted_plasma_previous=""
+    fi
+    sleep 1
+  done
+  if (( restarted_plasma_stable < 30 )); then
+    echo "NOVA_PHASE2_PLASMA_RESTART_SETTLE_FAILED"
+    plasma_restart_diagnostics
+    exit 1
+  fi
+  echo "NOVA_PHASE2_PLASMA_RESTART_SETTLED pid=$restarted_plasma_previous"
+  plasma_restart_diagnostics
+  # Reject a real Plasma core dump even if the crash handler has exited.
+  if ! plasma_cores="$(timeout -k 2s 8s coredumpctl --no-pager --since "$plasma_restart_since" list /usr/bin/plasmashell 2>&1)"; then
+    if ! grep -Fxq 'No coredumps found.' <<< "$plasma_cores"; then
+      printf '%s\n' "$plasma_cores"
+      exit 1
+    fi
+  elif grep -Fq '/usr/bin/plasmashell' <<< "$plasma_cores"; then
+    printf '%s\n' "$plasma_cores"
+    echo "NOVA_PHASE2_PLASMA_COREDUMP_FOUND"
+    exit 1
+  fi
+  # KDE normally runs drkonqi-coredump-processor in the background.
+  # Run #78 had no coredumps and active plasmashell, but the broad argv
+  # search matched that normal processor. Match only the actual drkonqi
+  # dialog process (exact comm), and retain the independent coredump gate.
+  if ! plasma_user_ctl is-active --quiet plasma-plasmashell.service ||
+     ! pgrep -u "$uid" -x plasmashell >/dev/null ||
+     pgrep -u "$uid" -x drkonqi >/dev/null; then
+    echo "NOVA_PHASE2_PLASMA_RESTART_UNHEALTHY"
+    exit 1
+  fi
+  echo "NOVA_PHASE2_PLASMA_RESTART_HEALTH_OK"
+  # Existing user API, outage, overlay and framebuffer checks now exercise
+  # the restarted session rather than the initial login.
+  # The earlier root-run health probe has stopped its temporary daemon.
+  # Prove that the installed login session itself owns a working host API,
+  # rather than accepting a nova-shell process with an offline UI.
+  assert_binary runuser
+  user_service_ready=0
+  echo "NOVA_PHASE2_USER_DAEMON_WAIT_BEGIN"
+  # Run authenticated requests as the actual account; never put tokens in argv/logs.
+  user_api() {
+    local account="$1" route="$2"
+    timeout -k 2s 6s runuser -u "$account" -- python3 - "$route" <<'PYAPI'
+import json, os, pathlib, stat, sys, urllib.request
+runtime = pathlib.Path("/run/user") / str(os.getuid())
+endpoint = runtime / "nova-endpoint.json"
+for path, mode in ((runtime, 0o700), (endpoint, 0o600)):
+    info = path.lstat()
+    assert info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == mode
+    assert not path.is_symlink()
+data = json.loads(endpoint.read_text())
+address = data["address"]
+assert address.startswith("127.0.0.1:") and 0 < int(address.split(":")[1]) < 65536
+request = urllib.request.Request("http://" + address + sys.argv[1],
+                                 headers={"Authorization": "Bearer " + data["token"]})
+with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=2) as response:
+    print(response.read().decode())
+PYAPI
+  }
+  for attempt in $(seq 1 45); do
+    if timeout -k 2s 5s runuser -u novatest -- env \
+         "XDG_RUNTIME_DIR=/run/user/$uid" \
+         "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
+         systemctl --user is-active --quiet nova-daemon.service &&
+       user_api novatest /health > /run/nova-phase2-user-health.json &&
+       grep -Fq '"service":"nova-daemon"' /run/nova-phase2-user-health.json &&
+       user_api novatest /api/system |
+         grep -Fq '"product":"NOVA OS"'; then
+      user_service_ready=1
+      break
+    fi
+    if (( attempt == 1 || attempt % 15 == 0 )); then
+      echo "NOVA_PHASE2_USER_DAEMON_POLL attempt=$attempt"
+    fi
+    sleep 1
+  done
+  if (( user_service_ready != 1 )); then
+    echo "NOVA user-session daemon or authenticated API unavailable after Wayland login"
+    timeout -k 2s 8s runuser -u novatest -- env \
+      "XDG_RUNTIME_DIR=/run/user/$uid" \
+      "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
+      systemctl --user --no-pager status nova-daemon.service || true
+    timeout -k 2s 8s journalctl --no-pager "_UID=$uid" -n 50 || true
+    exit 1
+  fi
+  echo "NOVA_PHASE2_USER_DAEMON_HEALTH_OK"
+  # Prove that the shipped user service recovers from an actual unexpected
+  # daemon process crash. A clean systemctl restart is insufficient evidence.
+  # Only touch the ephemeral novatest service in this isolated CI guest.
+  user_service_pid="$(timeout -k 2s 6s runuser -u novatest -- env \
+    "XDG_RUNTIME_DIR=/run/user/$uid" \
+    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
+    systemctl --user show --value -p MainPID nova-daemon.service)"
+  if [[ ! "$user_service_pid" =~ ^[1-9][0-9]*$ ]] ||
+     [[ ! -d "/proc/$user_service_pid" ]] ||
+     [[ "$(stat -c %u "/proc/$user_service_pid")" != "$uid" ]]; then
+    echo "NOVA_PHASE2_USER_DAEMON_PID_INVALID=$user_service_pid"
+    exit 1
+  fi
+  echo "NOVA_PHASE2_USER_DAEMON_CRASH_INJECTED pid=$user_service_pid"
+  kill -KILL "$user_service_pid"
+  echo "NOVA_PHASE2_USER_DAEMON_CRASH_SIGNAL_SENT"
+  recovered=0
+  for attempt in $(seq 1 30); do
+    echo "NOVA_PHASE2_USER_DAEMON_RECOVERY_POLL_BEGIN attempt=$attempt"
+    recovered_pid="$(timeout -k 2s 6s runuser -u novatest -- env \
+      "XDG_RUNTIME_DIR=/run/user/$uid" \
+      "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
+      systemctl --user show --value -p MainPID nova-daemon.service 2>/dev/null || true)"
+    echo "NOVA_PHASE2_USER_DAEMON_RECOVERY_PID attempt=$attempt pid=$recovered_pid"
+    if [[ "$recovered_pid" =~ ^[1-9][0-9]*$ ]] &&
+       [[ "$recovered_pid" != "$user_service_pid" ]] &&
+       [[ -d "/proc/$recovered_pid" ]] &&
+       [[ "$(stat -c %u "/proc/$recovered_pid")" == "$uid" ]] &&
+       user_api novatest /health > /run/nova-phase2-recovered-health.json &&
+       grep -Fq '"service":"nova-daemon"' /run/nova-phase2-recovered-health.json; then
+      recovered=1
+      break
+    fi
+    sleep 1
+  done
+  if (( recovered != 1 )); then
+    echo "NOVA_PHASE2_USER_DAEMON_CRASH_RECOVERY_FAILED"
+    timeout -k 2s 8s runuser -u novatest -- env \
+      "XDG_RUNTIME_DIR=/run/user/$uid" \
+      "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
+      systemctl --user --no-pager status nova-daemon.service || true
+    exit 1
+  fi
+  echo "NOVA_PHASE2_USER_DAEMON_CRASH_RECOVERY_OK"
+  # Dedicated G2 outage probe: keep the real shell alive while its user API
+  # is deliberately stopped. This proves transport recovery, not visual UI
+  # feedback (which still requires separate framebuffer inspection).
+  user_daemon_ctl() {
+    timeout -k 2s 8s runuser -u novatest -- env \
+      "XDG_RUNTIME_DIR=/run/user/$uid" \
+      "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
+      systemctl --user "$@" nova-daemon.service
+  }
+  user_daemon_ctl stop
+  # A successful stop job is not proof that the listening socket is gone.
+  # Capture ownership and unit state on failure, including a competing
+  # listener or a session-triggered start. Never kill an unknown process.
+  outage_stopped=0
+  for attempt in $(seq 1 15); do
+    if ! user_daemon_ctl is-active --quiet &&
+       ! user_api novatest /health >/dev/null 2>&1; then
+      outage_stopped=1
+      break
+    fi
+    sleep 1
+  done
+  if (( outage_stopped != 1 )); then
+    echo "NOVA_PHASE2_USER_DAEMON_OUTAGE_FAILED"
+    user_daemon_ctl show -p MainPID -p ActiveState -p SubState -p NRestarts -p Result || true
+    timeout -k 2s 8s ss -ltnp || true
+    timeout -k 2s 8s ps -eo pid,ppid,uid,stat,args | grep -E 'nova-daemon|nova-shell' || true
+    timeout -k 2s 8s journalctl --no-pager "_UID=$uid" -n 100 || true
+    exit 1
+  fi
+  if ! pgrep -u "$uid" -x nova-shell >/dev/null; then
+    echo "NOVA_PHASE2_SHELL_EXITED_DURING_OUTAGE"
+    exit 1
+  fi
+  echo "NOVA_PHASE2_USER_DAEMON_OUTAGE_OK"
+  # The packaged UI polls every 10 seconds. Hold the real outage long
+  # enough for the host to capture its offline state without altering the UI.
+  sleep 20
+  echo "NOVA_PHASE2_OFFLINE_FRAME_READY"
+  sleep 45
+  if user_api novatest /health >/dev/null 2>&1; then
+    echo "NOVA_PHASE2_OUTAGE_ENDED_PREMATURELY"
+    exit 1
+  fi
+  echo "NOVA_PHASE2_OFFLINE_FRAME_WINDOW_END"
+  user_daemon_ctl start
+  outage_recovered=0
+  for attempt in $(seq 1 30); do
+    if user_api novatest /health > /run/nova-phase2-outage-health.json &&
+       grep -Fq '"service":"nova-daemon"' /run/nova-phase2-outage-health.json &&
+       pgrep -u "$uid" -x nova-shell >/dev/null; then
+      outage_recovered=1
+      break
+    fi
+    sleep 1
+  done
+  if (( outage_recovered != 1 )); then
+    echo "NOVA_PHASE2_USER_DAEMON_OUTAGE_RECOVERY_FAILED"
+    exit 1
+  fi
+  echo "NOVA_PHASE2_USER_DAEMON_OUTAGE_RECOVERY_OK"
+  # G2 investigation: capture the real installed guest's KDE Welcome Center
+  # launch path before changing production autostart rules. CI-only probe;
+  # never close windows or mutate the session to make a screenshot pass.
+  echo "NOVA_PHASE2_WELCOME_DIAGNOSTICS_BEGIN"
+  timeout -k 2s 8s ps -eo pid,ppid,uid,stat,args --sort=pid |
+    grep -Ei '(^ *PID|plasma-welcome|welcome-center|kded|klauncher|nova-shell|kwin_wayland)' || true
+  for pid in $(pgrep -u "$uid" -f 'plasma-welcome|welcome-center' || true); do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    echo "NOVA_PHASE2_WELCOME_PID=$pid"
+    timeout -k 1s 3s sh -c 'tr "\0" " " < "/proc/$1/cmdline"; echo' sh "$pid" || true
+    timeout -k 1s 3s sh -c 'cat "/proc/$1/cgroup"' sh "$pid" || true
+    timeout -k 1s 3s ps -o pid,ppid,user,comm,args -p "$pid" || true
+  done
+  timeout -k 2s 8s runuser -u novatest -- env \
+    "XDG_RUNTIME_DIR=/run/user/$uid" \
+    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
+    systemctl --user --no-pager list-units --all '*welcome*' '*plasma*' || true
+  for dir in /etc/xdg/autostart /usr/share/xdg/autostart /home/novatest/.config/autostart; do
+    [[ -d "$dir" ]] || continue
+    find "$dir" -maxdepth 1 -type f \( -iname '*welcome*' -o -iname '*discover*' \) -print -exec grep -E '^(Name|Exec|Hidden|OnlyShowIn|NotShowIn|X-KDE-autostart-condition)=' {} \; 2>/dev/null || true
+  done
+  echo "NOVA_PHASE2_WELCOME_DIAGNOSTICS_END"
+  # This is a shipping-image acceptance assertion, not a cosmetic screenshot
+  # filter: KDE Welcome has obscured the real NOVA workspace in earlier green
+  # runs. Confirm the installed root carries the production systemd mask and
+  # that no welcome application survived login before claiming GUI readiness.
+  welcome_mask=/etc/systemd/user/app-org.kde.plasma-welcome@.service
+  if [[ ! -L "$welcome_mask" ]] || [[ "$(readlink "$welcome_mask")" != /dev/null ]]; then
+    echo "NOVA_PHASE2_WELCOME_MASK_MISSING path=$welcome_mask"
+    exit 1
+  fi
+  # KDE's generated unit is escaped on the installed guest. The unescaped
+  # mask alone did not prevent the Welcome Center overlay in VM #55.
+  escaped_welcome_mask='/etc/systemd/user/app-org.kde.plasma\x2dwelcome@.service'
+  if [[ ! -L "$escaped_welcome_mask" ]] || [[ "$(readlink "$escaped_welcome_mask")" != /dev/null ]]; then
+    echo "NOVA_PHASE2_ESCAPED_WELCOME_MASK_MISSING path=$escaped_welcome_mask"
+    exit 1
+  fi
+  echo "NOVA_PHASE2_ESCAPED_WELCOME_MASK_OK"
+  if pgrep -u "$uid" -x plasma-welcome >/dev/null; then
+    echo "NOVA_PHASE2_WELCOME_OVERLAY_ACTIVE"
+    exit 1
+  fi
+  echo "NOVA_PHASE2_WELCOME_SUPPRESSED_OK"
+  # G2: exercise a second real systemd user manager concurrently with
+  # the graphical login. A shared loopback listener is not per-user isolation.
+  # This account exists only on the disposable CI graphical disk.
+  test -f /etc/nova-phase2-ci-only
+  if id nova-isolation-test >/dev/null 2>&1; then
+    echo "NOVA_PHASE2_MULTIUSER_ACCOUNT_ALREADY_EXISTS"
+    exit 1
+  fi
+  useradd --create-home --shell /bin/bash nova-isolation-test
+  second_uid="$(id -u nova-isolation-test)"
+  test "$second_uid" != "$uid"
+  timeout -k 2s 20s systemctl start "user@$second_uid.service"
+  second_ctl() {
+    timeout -k 2s 8s runuser -u nova-isolation-test -- env \
+      "XDG_RUNTIME_DIR=/run/user/$second_uid" \
+      "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$second_uid/bus" \
+      systemctl --user "$@"
+  }
+  second_ctl start nova-daemon.service || true
+  first_pid="$(user_daemon_ctl show --value -p MainPID)"
+  second_ready=0
+  for attempt in $(seq 1 15); do
+    second_pid="$(second_ctl show --value -p MainPID nova-daemon.service || true)"
+    if [[ "$second_pid" =~ ^[1-9][0-9]*$ ]] &&
+       [[ "$second_pid" != "$first_pid" ]] &&
+       [[ -d "/proc/$second_pid" ]] &&
+       [[ "$(stat -c %u "/proc/$second_pid")" == "$second_uid" ]] &&
+       second_ctl is-active --quiet nova-daemon.service &&
+       user_api nova-isolation-test /health | grep -Fq '"service":"nova-daemon"'; then
+      second_ready=1
+      break
+    fi
+    sleep 1
+  done
+  echo "NOVA_PHASE2_MULTIUSER_DAEMON_PIDS first=$first_pid second=${second_pid:-none}"
+  second_ctl show -p MainPID -p ActiveState -p SubState -p NRestarts -p Result nova-daemon.service || true
+  timeout -k 2s 8s journalctl --no-pager "_UID=$second_uid" -u "user@$second_uid.service" -n 60 || true
+  timeout -k 2s 8s journalctl --no-pager "_UID=$second_uid" _SYSTEMD_USER_UNIT=nova-daemon.service -n 60 || true
+  timeout -k 2s 8s ss -ltnp || true
+  # A second account must not silently reuse the first user's API.
+  if (( second_ready != 1 )); then
+    echo "NOVA_PHASE2_MULTIUSER_DAEMON_ISOLATION_FAILED"
+    exit 1
+  fi
+  # Verify both endpoints independently and reject cross-account credentials.
+  user_api novatest /api/system | grep -Fq '"product":"NOVA OS"'
+  user_api nova-isolation-test /api/system | grep -Fq '"product":"NOVA OS"'
+  python3 - "$uid" "$second_uid" <<'PYISOLATION'
+import json, pathlib, subprocess, sys, urllib.error, urllib.request
+uids = sys.argv[1:]
+paths = [pathlib.Path("/run/user") / uid / "nova-endpoint.json" for uid in uids]
+data = [json.loads(path.read_text()) for path in paths]
+assert data[0]["address"] != data[1]["address"]
+assert data[0]["token"] != data[1]["token"]
+for i, account in enumerate(("novatest", "nova-isolation-test")):
+    other = 1 - i
+    assert subprocess.run(["runuser", "-u", account, "--", "test", "-r", str(paths[other])]).returncode == 1
+    for token in (None, data[i]["token"]):
+        headers = {} if token is None else {"Authorization": "Bearer " + token}
+        request = urllib.request.Request("http://" + data[other]["address"] + "/health", headers=headers)
+        try:
+            urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=2)
+        except urllib.error.HTTPError as error:
+            assert error.code == 401
+        else:
+            raise AssertionError("cross-account or unauthenticated request accepted")
+PYISOLATION
+  echo "NOVA_PHASE2_MULTIUSER_AUTHENTICATED_ISOLATION_OK"
+  second_ctl stop nova-daemon.service
+  timeout -k 2s 15s systemctl stop "user@$second_uid.service"
+  # Remove only the account created by this CI-only probe so the same
+  # installed disk can execute the complete isolation test on a cold boot.
+  userdel --remove nova-isolation-test
+  ! id nova-isolation-test >/dev/null 2>&1
+  user_daemon_ctl is-active --quiet
+  user_api novatest /health | grep -Fq '"service":"nova-daemon"'
+  # Measure the installed guest before and after the host interaction window.
+  # These samples are observations, not an arbitrary leak/performance threshold.
+  gui_resource_sample() {
+    echo "NOVA_PHASE2_GUI_RESOURCE_SAMPLE_BEGIN phase=$1"
+    cat /proc/sys/kernel/random/boot_id
+    cat /proc/uptime
+    free -k
+    ps -u "$uid" -o pid,comm,etime,time,pcpu,rss --sort=pid
+    echo "NOVA_PHASE2_GUI_RESOURCE_SAMPLE_END phase=$1"
+  }
+  gui_resource_sample before_interaction
+  echo "NOVA_PHASE2_GRAPHICAL_SESSION_OK"
+  # Keep the disposable guest alive for framebuffer and real input checks.
+  # Host budget: up to 5s polling + 15s settle + 25s capture + 120s
+  # interaction timeout. Run #94 powered off during the final reopen capture.
+  # Leave margin for scheduling; host still independently requires all frames.
+  sleep 190
+  gui_resource_sample after_interaction
+  # Do not emit a pass before the interaction window and final health checks.
+  user_daemon_ctl is-active --quiet
+  user_api novatest /health | grep -Fq '"service":"nova-daemon"'
+  pgrep -u "$uid" -x kwin_wayland >/dev/null
+  pgrep -u "$uid" -x nova-shell >/dev/null
+  echo "NOVA_PHASE2_GUI_POST_INTERACTION_HEALTH_OK"
+  echo "NOVA_PHASE2_FIRMWARE=$firmware"
+  echo "NOVA_PHASE2_GUEST_PASS"
+else
+  # Re-emit firmware evidence after startup chatter: UEFI kernel printk can
+  # splice into the initial serial line (observed VM run 43035665380).
+  echo "NOVA_PHASE2_FIRMWARE=$firmware"
+  echo "NOVA_PHASE2_GUEST_PASS"
+fi

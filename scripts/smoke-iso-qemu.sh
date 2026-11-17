@@ -292,9 +292,25 @@ esac
 
 FAILURES=0
 for mode in "${FIRMWARES[@]}"; do
-  if ! run_firmware_test "$mode"; then
-    FAILURES=$((FAILURES + 1))
+  if run_firmware_test "$mode"; then
+    continue
   fi
+  # Preserve a crashed QEMU attempt; retry only a host SIGSEGV once.
+  # Never retry guest panics, normal boot failures or timeouts.
+  if grep -Eiq "segmentation fault|dumped core|signal 11" "$LOG_DIR/$mode.qemu.log" &&
+     grep -Fq "Reason: QEMU exited before the serial login prompt." "$LOG_DIR/$mode.result.txt"; then
+    for suffix in serial.log qemu.log monitor.log result.txt ppm; do
+      if [[ -f "$LOG_DIR/$mode.$suffix" ]]; then
+        mv "$LOG_DIR/$mode.$suffix" "$LOG_DIR/$mode.first-attempt.$suffix"
+      fi
+    done
+    echo "NOVA_QEMU_HOST_CRASH_RETRY mode=$mode retry_limit=1" >&2
+    if run_firmware_test "$mode"; then
+      echo "NOVA_QEMU_HOST_CRASH_RECOVERED mode=$mode first_attempt=failed" >&2
+      continue
+    fi
+  fi
+  FAILURES=$((FAILURES + 1))
 done
 
 if (( FAILURES > 0 )); then

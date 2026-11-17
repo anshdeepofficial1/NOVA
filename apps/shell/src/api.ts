@@ -1,8 +1,16 @@
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { InspectResponse, SystemInfo } from "./types";
 
 const API_BASE = import.meta.env.VITE_NOVA_API_URL ?? "http://127.0.0.1:47820";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  if (isTauri()) {
+    try {
+      return await invoke<T>("daemon_request", { path, body: typeof init?.body === "string" ? init.body : null });
+    } catch (error) {
+      throw new Error(String(error));
+    }
+  }
   const response = await fetch(API_BASE + path, {
     ...init,
     headers: {
@@ -39,8 +47,8 @@ export function inspectPackage(path: string): Promise<InspectResponse> {
 
 export async function checkHealth(): Promise<boolean> {
   try {
-    const response = await fetch(API_BASE + "/health");
-    return response.ok;
+    const response = await request<{ status: string; service: string }>("/health");
+    return response.status === "ok" && response.service === "nova-daemon";
   } catch {
     return false;
   }

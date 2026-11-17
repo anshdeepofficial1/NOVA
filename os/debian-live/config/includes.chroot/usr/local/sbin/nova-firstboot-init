@@ -39,6 +39,15 @@ command -v nova-shell >/dev/null || fail "missing NOVA desktop executable"
 [[ -s /etc/xdg/autostart/nova-desktop.desktop ]] || fail "missing NOVA autostart"
 command -v nmcli >/dev/null || fail "missing NetworkManager client"
 
+# Ensure that installed-system first login inherits the production XDG masks,
+# rather than relying on the live ISO's chroot hook execution alone.
+for name in org.kde.plasma-welcome.desktop org.kde.discover.notifier.desktop; do
+  entry="/etc/xdg/autostart/$name"
+  [[ -s "$entry" ]] || fail "missing installed KDE overlay mask: $name"
+  grep -Fxq 'Hidden=true' "$entry" || fail "KDE overlay mask not hidden: $name"
+done
+log "NOVA_FIRSTBOOT_OVERLAY_MASKS_OK"
+
 # Only record completion after all installed-system prerequisites pass. This
 # file is not a substitute for graphical login, health or hardware acceptance.
 install -d -m 0700 "$state_dir"

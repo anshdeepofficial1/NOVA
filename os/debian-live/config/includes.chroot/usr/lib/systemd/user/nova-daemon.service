@@ -9,11 +9,14 @@ Type=simple
 ExecStart=/usr/local/bin/nova-daemon
 Restart=on-failure
 RestartSec=3
-Environment=NOVA_BIND=127.0.0.1:47820
+Environment=NOVA_PRIVATE_ENDPOINT=1
+ExecStopPost=/usr/bin/rm -f %t/nova-endpoint.json
 Environment=RUST_LOG=info
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
+# Private endpoint publication needs atomic create/rename in the user runtime directory.
+ReadWritePaths=%t
 ProtectHome=read-only
 ProtectKernelTunables=true
 ProtectKernelModules=true

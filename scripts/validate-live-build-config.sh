@@ -9,6 +9,7 @@ ISOLINUX_CONFIG="$LIVE_DIR/config/bootloaders/isolinux/isolinux.cfg"
 FIRSTBOOT_SCRIPT="$LIVE_DIR/config/includes.chroot/usr/local/sbin/nova-firstboot-init"
 FIRSTBOOT_UNIT="$LIVE_DIR/config/includes.chroot/usr/lib/systemd/system/nova-firstboot.service"
 FIRSTBOOT_HOOK="$LIVE_DIR/config/hooks/live/9000-enable-nova-firstboot.hook.chroot"
+DESKTOP_OVERLAY_HOOK="$LIVE_DIR/config/hooks/live/9010-disable-kde-first-login-overlays.hook.chroot"
 TEMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
@@ -44,6 +45,9 @@ done
 # Verify first boot will actually be installed and enabled, not just documented.
 [[ -x "$FIRSTBOOT_SCRIPT" ]] || fail "installed NOVA first-boot script must be executable"
 [[ -x "$FIRSTBOOT_HOOK" ]] || fail "live-build first-boot enable hook must be executable"
+[[ -x "$DESKTOP_OVERLAY_HOOK" ]] || fail "shipping KDE first-login overlay hook must be executable"
+sh -n "$DESKTOP_OVERLAY_HOOK"
+grep -Fq 'Hidden=true' "$DESKTOP_OVERLAY_HOOK" || fail "KDE first-login overlay suppression is missing"
 bash -n "$FIRSTBOOT_SCRIPT"
 sh -n "$FIRSTBOOT_HOOK"
 grep -Fq 'systemctl enable nova-firstboot.service' "$FIRSTBOOT_HOOK" || fail "NOVA first-boot service is not enabled"

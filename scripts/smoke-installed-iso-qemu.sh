@@ -534,8 +534,35 @@ with socket.create_connection(("127.0.0.1", 5906), timeout=5) as vnc:
     keyboard_result = frame("interaction-keyboard-result")
     if difference(keyboard_typed, keyboard_result) < .005:
         raise RuntimeError("keyboard submit did not visibly change the inspector")
+    # Reacquire input focus after the async submit disabled its button.
+    click(240, 74)
+    time.sleep(.4)
+    replace_text("")
+    tap(0xff08)  # Backspace removes the selected value.
+    time.sleep(.5)
+    empty = frame("interaction-empty")
+    if region_change(keyboard_result, empty, 110, 60, 760, 90) < .005:
+        raise RuntimeError("clearing inspector did not visibly change input")
     tap(0xff1b)
-    frame("interaction-escape")
+    time.sleep(.8)
+    escaped = frame("interaction-escape")
+    if difference(empty, escaped) < .05:
+        raise RuntimeError("Escape did not scroll to the inspector launch action")
+    # Enter must activate the focused launch action and return to the input.
+    tap(0xff0d)
+    time.sleep(.8)
+    returned_focus = frame("interaction-escape-return")
+    if difference(escaped, returned_focus) < .05:
+        raise RuntimeError("Enter after Escape did not return to inspector")
+    replace_text("nova-focus-proof.deb")
+    time.sleep(.5)
+    frame("interaction-escape-typed")
+    tap(0xff0d)
+    time.sleep(3)
+    frame("interaction-escape-result")
+    print("NOVA_PHASE2_VNC_ESCAPE_ROUNDTRIP_FRAME_CHANGE_OK", flush=True)
+    # Independent review must confirm empty hint, launch focus and exact
+    # filename in the final result; framebuffer differences alone are not proof.
     print("NOVA_PHASE2_VNC_INSPECTOR_FRAME_CHANGE_OK", flush=True)
     # Exercise real window-manager close and KDE launcher input.
     key(0xffe9, True)

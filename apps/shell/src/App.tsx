@@ -46,6 +46,13 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [refresh]);
 
+  function focusInspectorControl(id: string) {
+    const control = document.getElementById(id);
+    if (!control) return;
+    control.scrollIntoView({ block: "center", behavior: "instant" });
+    control.focus({ preventScroll: true });
+  }
+
   async function onInspect(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (busy || !input.trim()) return;
@@ -90,7 +97,12 @@ export default function App() {
               <h2>One workspace.<br /><em>Many ecosystems.</em></h2>
               <p>NOVA is building a bridge between native desktop apps, Android, Windows compatibility and the web—with clear boundaries for what works today.</p>
               <div className="hero-actions">
-                <button id="inspect-app-action" className="primary-button" onClick={() => document.getElementById("compat-input")?.focus()}>Inspect an app <span>↗</span></button>
+                <button id="inspect-app-action" className="primary-button" type="button" onClick={() => focusInspectorControl("compat-input")} onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    focusInspectorControl("compat-input");
+                  }
+                }}>Inspect an app <span>↗</span></button>
                 <span className="subtle-note">Early development · Not an installable OS yet</span>
               </div>
             </div>
@@ -121,7 +133,7 @@ export default function App() {
                 if (event.key === "Escape") {
                   event.preventDefault();
                   setError("");
-                  document.getElementById("inspect-app-action")?.focus();
+                  focusInspectorControl("inspect-app-action");
                 }
               }}>
                 <span className="input-symbol">⌘</span>

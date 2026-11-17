@@ -696,6 +696,10 @@ PYISOLATION
   echo "NOVA_PHASE2_MULTIUSER_AUTHENTICATED_ISOLATION_OK"
   second_ctl stop nova-daemon.service
   timeout -k 2s 15s systemctl stop "user@$second_uid.service"
+  # Remove only the account created by this CI-only probe so the same
+  # installed disk can execute the complete isolation test on a cold boot.
+  userdel --remove nova-isolation-test
+  ! id nova-isolation-test >/dev/null 2>&1
   user_daemon_ctl is-active --quiet
   user_api novatest /health | grep -Fq '"service":"nova-daemon"'
   # Measure the installed guest before and after the host interaction window.

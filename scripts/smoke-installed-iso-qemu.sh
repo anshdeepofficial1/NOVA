@@ -617,7 +617,19 @@ run_one() {
   fi
   # Shutdown by d-i is necessary but not sufficient; installed disk must boot.
   echo "Installer exited, now booting $mode virtual disk with ISO REMOVED"
-  local monitor_socket="" screenshot="$OUTPUT/$mode-graphical-session.ppm"
+  # Repeat the complete graphical probe on the same newly installed disk.
+  # Each cycle starts a new QEMU process after verified guest poweroff;
+  # retain the installed disk and UEFI NVRAM, never attach the ISO again.
+  local cycles=1 cycle capture boot_id
+  local -a boot_ids=()
+  if [[ "$GRAPHICAL" == true && "$FULLHD_VISUAL" == true ]]; then cycles=3; fi
+  for ((cycle=1; cycle<=cycles; cycle++)); do
+    capture="$mode"
+    if (( cycle > 1 )); then capture="$mode-cold-$cycle"; fi
+    boot_log="$OUTPUT/$capture-installed-serial.log"
+    result="$OUTPUT/$capture-result.txt"
+    echo "NOVA_PHASE2_COLD_BOOT_BEGIN cycle=$cycle disk=$disk"
+  local monitor_socket="" screenshot="$OUTPUT/$capture-graphical-session.ppm"
   local screenshot_done=false
   local offline_screenshot_done=false
   local graphics_args=(-vga std -display none)
@@ -625,8 +637,8 @@ run_one() {
   if [[ "$GRAPHICAL" == true ]]; then
     # Keep the kernel console/getty and the CI probe on distinct UARTs.
     # Preserve both logs, but accept markers only from the dedicated probe.
-    serial_args=(-serial "file:$OUTPUT/$mode-installed-console.log" -serial "file:$boot_log")
-    monitor_socket="$OUTPUT/$mode-graphical-monitor.sock"
+    serial_args=(-serial "file:$OUTPUT/$capture-installed-console.log" -serial "file:$boot_log")
+    monitor_socket="$OUTPUT/$capture-graphical-monitor.sock"
     local video_args=(-vga virtio)
     if [[ "$FULLHD_VISUAL" == true ]]; then
       video_args=(-vga none -device virtio-vga,xres=1920,yres=1080)
@@ -639,7 +651,7 @@ run_one() {
     "${serial_args[@]}" -no-reboot -boot order=c \
     -drive "if=virtio,format=qcow2,file=$disk" "${secondary_args[@]}" \
     -netdev user,id=net0 -device virtio-net-pci,netdev=net0 "${FW_ARGS[@]}" \
-    > "$OUTPUT/$mode-installed-qemu.log" 2>&1 &
+    > "$OUTPUT/$capture-installed-qemu.log" 2>&1 &
   QEMU_PID=$!
   local waited=0
   # A graphical probe already has its own bounded guest service deadline.
@@ -653,7 +665,7 @@ run_one() {
     if [[ "$GRAPHICAL" == true && "$offline_screenshot_done" == false && -f "$boot_log" ]] &&
        grep -Fxq 'NOVA_PHASE2_OFFLINE_FRAME_READY' "$boot_log"; then
       if grep -Fq 'NOVA_PHASE2_OFFLINE_FRAME_WINDOW_END' "$boot_log" ||
-         ! timeout -k 2s 25s bash -c "$(declare -f capture_guest_screen); capture_guest_screen \"\$1\" \"\$2\"" bash "$monitor_socket" "$OUTPUT/$mode-graphical-offline.ppm" ||
+         ! timeout -k 2s 25s bash -c "$(declare -f capture_guest_screen); capture_guest_screen \"\$1\" \"\$2\"" bash "$monitor_socket" "$OUTPUT/$capture-graphical-offline.ppm" ||
          grep -Fq 'NOVA_PHASE2_OFFLINE_FRAME_WINDOW_END' "$boot_log"; then
         printf 'mode=%s\nresult=FAIL\nstage=offline_framebuffer\n' "$mode" > "$result"
         return 1
@@ -693,12 +705,12 @@ PYFULLHD
         fi
         echo "Full HD visual capture only; interaction proof belongs to the separate 1280x800 run."
       else
-        if ! timeout -k 2s 85s bash -c "$(declare -f graphical_scroll_probe); graphical_scroll_probe \"\$1\" \"\$2\"" bash "$monitor_socket" "$OUTPUT/$mode" > "$OUTPUT/$mode-graphical-scroll.log" 2>&1; then
-          cat "$OUTPUT/$mode-graphical-scroll.log"
+        if ! timeout -k 2s 85s bash -c "$(declare -f graphical_scroll_probe); graphical_scroll_probe \"\$1\" \"\$2\"" bash "$monitor_socket" "$OUTPUT/$capture" > "$OUTPUT/$capture-graphical-scroll.log" 2>&1; then
+          cat "$OUTPUT/$capture-graphical-scroll.log"
           printf 'mode=%s\nresult=FAIL\nstage=graphical_scroll\n' "$mode" > "$result"
           return 1
         fi
-        cat "$OUTPUT/$mode-graphical-scroll.log"
+        cat "$OUTPUT/$capture-graphical-scroll.log"
       fi
       screenshot_done=true
     fi
@@ -792,7 +804,17 @@ PYRESOURCE
       fi
       echo "PASS: $mode installed NOVA booted without ISO, passed guest checks and shut down cleanly"
       printf 'mode=%s\nfilesystem=%s\nresult=PASS\npostinstall=verified\nshutdown=verified\ngraphical=%s\npreserved_secondary=%s\n' "$mode" "$FILESYSTEM" "$GRAPHICAL" "$PRESERVE_SECONDARY" > "$result"
-      return 0
+      if [[ "$GRAPHICAL" == true ]]; then
+        boot_id="$(awk '/^NOVA_PHASE2_GUI_RESOURCE_SAMPLE_BEGIN phase=before_interaction$/ {getline; print; exit}' "$boot_log")"
+        [[ "$boot_id" =~ ^[0-9a-f-]{36}$ ]] || return 1
+        if [[ " ${boot_ids[*]} " == *" $boot_id "* ]]; then
+          printf 'mode=%s\nresult=FAIL\nstage=duplicate_boot_id\n' "$result" > "$result"
+          return 1
+        fi
+        boot_ids+=("$boot_id")
+        echo "NOVA_PHASE2_COLD_BOOT_OK cycle=$cycle boot_id=$boot_id"
+      fi
+      break
     fi
     if [[ -f "$boot_log" ]] && grep -Fq 'NOVA_PHASE2_GUEST_FAIL' "$boot_log"; then
       echo "Guest acceptance failure:" >&2
@@ -822,6 +844,9 @@ PYRESOURCE
     sleep 5
     waited=$((waited+5))
   done
+  if (( waited < boot_wait_limit )); then
+    continue
+  fi
   # A failed graphical boot still needs visual evidence. Capture the raw
   # framebuffer before cleanup, even if it is black or a login screen.
   # This diagnostic never sets screenshot_done or changes the FAIL result.
@@ -850,6 +875,11 @@ PY
   [[ ! -f "$boot_log" ]] || tail -n 80 "$boot_log" >&2
   printf 'mode=%s\nresult=FAIL\nstage=boot_timeout\n' "$mode" > "$result"
   return 1
+  done
+  if (( cycles > 1 )); then
+    printf 'cycles=%s\nboot_ids=%s\nresult=PASS\n' "$cycles" "${boot_ids[*]}" > "$OUTPUT/$mode-cold-boots-result.txt"
+  fi
+  return 0
 }
 
 modes=("$FIRMWARE")

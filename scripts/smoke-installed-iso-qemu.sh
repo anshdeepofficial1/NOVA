@@ -561,6 +561,28 @@ with socket.create_connection(("127.0.0.1", 5906), timeout=5) as vnc:
     time.sleep(3)
     frame("interaction-escape-result")
     print("NOVA_PHASE2_VNC_ESCAPE_ROUNDTRIP_FRAME_CHANGE_OK", flush=True)
+    # Exercise a real daemon rejection, then verify the same form can recover.
+    click(240, 74)
+    time.sleep(.4)
+    replace_text("nova-error-proof.unsupported")
+    time.sleep(.4)
+    error_typed = frame("interaction-error-typed")
+    tap(0xff0d)
+    time.sleep(2)
+    error_result = frame("interaction-error-result")
+    if difference(error_typed, error_result) < .005:
+        raise RuntimeError("unsupported input did not visibly change inspector")
+    click(240, 74)
+    time.sleep(.4)
+    replace_text("nova-recovery-proof.deb")
+    tap(0xff0d)
+    time.sleep(2)
+    recovered = frame("interaction-error-recovered")
+    if difference(error_result, recovered) < .005:
+        raise RuntimeError("valid input did not visibly recover after rejection")
+    print("NOVA_PHASE2_VNC_ERROR_RECOVERY_FRAME_CHANGE_OK", flush=True)
+    # Review the exact daemon error and subsequent Debian result in the PPMs.
+
     # Independent review must confirm empty hint, launch focus and exact
     # filename in the final result; framebuffer differences alone are not proof.
     print("NOVA_PHASE2_VNC_INSPECTOR_FRAME_CHANGE_OK", flush=True)
@@ -732,7 +754,7 @@ PYFULLHD
         fi
         echo "Full HD visual capture only; interaction proof belongs to the separate 1280x800 run."
       else
-        if ! timeout -k 2s 85s bash -c "$(declare -f graphical_scroll_probe); graphical_scroll_probe \"\$1\" \"\$2\"" bash "$monitor_socket" "$OUTPUT/$capture" > "$OUTPUT/$capture-graphical-scroll.log" 2>&1; then
+        if ! timeout -k 2s 105s bash -c "$(declare -f graphical_scroll_probe); graphical_scroll_probe \"\$1\" \"\$2\"" bash "$monitor_socket" "$OUTPUT/$capture" > "$OUTPUT/$capture-graphical-scroll.log" 2>&1; then
           cat "$OUTPUT/$capture-graphical-scroll.log"
           printf 'mode=%s\nresult=FAIL\nstage=graphical_scroll\n' "$mode" > "$result"
           return 1

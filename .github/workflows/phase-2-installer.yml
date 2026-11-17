@@ -26,6 +26,8 @@ on:
   # workflow_run uses the default-branch workflow definition. Until the
   # acceptance branch is merged, trigger branch acceptance with a harness-only
   # push after its ISO build succeeds; never substitute a main-branch ISO.
+  # Branch ISO #52 (44059264129) contains the inspector keyboard roundtrip fix;
+  # this harness-only revision requests its installed-VM acceptance.
   # On main, re-run acceptance against every successfully rebuilt ISO.
   workflow_run:
     workflows: ["Build NOVA ISO"]

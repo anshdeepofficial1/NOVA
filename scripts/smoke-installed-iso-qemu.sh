@@ -590,6 +590,39 @@ with socket.create_connection(("127.0.0.1", 5906), timeout=5) as vnc:
         raise RuntimeError("valid input did not visibly recover after rejection")
     print("NOVA_PHASE2_VNC_ERROR_RECOVERY_FRAME_CHANGE_OK", flush=True)
     # Review the exact daemon error and subsequent Debian result in the PPMs.
+    # Hold the real user daemon briefly via KDE's command launcher. This
+    # exercises the installed native client's five-second timeout, not a
+    # mocked response or an artificial delay in shipping application code.
+    # The bounded shell command resumes the daemon even if the host probe fails.
+    key(0xffe9, True)
+    tap(0xffbf)  # Alt+F2
+    key(0xffe9, False)
+    time.sleep(1)
+    for char in "sh -c 'pkill -STOP -x nova-daemon; sleep 9; pkill -CONT -x nova-daemon'":
+        tap(ord(char))
+    frame("interaction-loading-launcher")
+    tap(0xff0d)
+    time.sleep(.8)
+    click(240, 438)
+    tap(0xff0d)
+    time.sleep(.5)
+    loading = frame("interaction-loading")
+    if difference(recovered, loading) < .005:
+        raise RuntimeError("pending request did not visibly change inspector")
+    time.sleep(5)
+    timed_out = frame("interaction-loading-timeout")
+    if difference(loading, timed_out) < .005:
+        raise RuntimeError("pending request did not visibly transition to timeout")
+    time.sleep(4)
+    click(240, 438)
+    tap(0xff0d)
+    time.sleep(2)
+    loading_recovered = frame("interaction-loading-recovered")
+    if difference(timed_out, loading_recovered) < .005:
+        raise RuntimeError("inspector did not visibly recover after daemon resume")
+    print("NOVA_PHASE2_VNC_LOADING_TIMEOUT_RECOVERY_FRAME_CHANGE_OK", flush=True)
+    # Independent review must confirm Checking route, real timeout, and
+    # the recovered Debian result; frame differences are only a prefilter.
 
     # Independent review must confirm empty hint, launch focus and exact
     # filename in the final result; framebuffer differences alone are not proof.

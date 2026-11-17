@@ -23,8 +23,10 @@ on:
       - "scripts/phase2-firstboot.sh"
       - "scripts/phase2-btrfs-layout-ci.sh"
       - ".github/workflows/phase-2-installer.yml"
-  # Re-run the installed-system acceptance against every successfully rebuilt ISO,
-  # not only when its VM harness changes.
+  # workflow_run uses the default-branch workflow definition. Until the
+  # acceptance branch is merged, trigger branch acceptance with a harness-only
+  # push after its ISO build succeeds; never substitute a main-branch ISO.
+  # On main, re-run acceptance against every successfully rebuilt ISO.
   workflow_run:
     workflows: ["Build NOVA ISO"]
     types: [completed]
